@@ -23,6 +23,7 @@ packages = ["src/brave_cli"]
 target-version = "py312"
 line-length = 100
 select = ["E", "F", "I", "UP", "B", "S"]
+ignore = ["B008", "S101"]
 
 [tool.mypy]
 python_version = "3.12"

@@ -3,7 +3,6 @@ import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
 
 from playwright.sync_api import Browser, BrowserContext, Page, sync_playwright
 
@@ -37,14 +36,21 @@ class BraveSession:
         if not executable or not executable.is_file():
             raise ConnectionError("Brave executable not found")
         self.settings.user_data_dir.mkdir(parents=True, exist_ok=True)
-        subprocess.Popen([str(executable), f"--remote-debugging-port={self.settings.cdp_port}", f"--user-data-dir={self.settings.user_data_dir}", "about:blank"], close_fds=True)
+        command = [
+            str(executable),
+            f"--remote-debugging-port={self.settings.cdp_port}",
+            f"--user-data-dir={self.settings.user_data_dir}",
+            "about:blank",
+        ]
+        subprocess.Popen(command, close_fds=True)  # noqa: S603
         self.connect()
 
     def connect(self) -> None:
         self._playwright = sync_playwright().start()
         try:
-            self.browser = self._playwright.chromium.connect_over_cdp(self.settings.cdp_url)
-            self.context = self.browser.contexts[0] if self.browser.contexts else self.browser.new_context()
+            browser = self._playwright.chromium.connect_over_cdp(self.settings.cdp_url)
+            self.browser = browser
+            self.context = browser.contexts[0] if browser.contexts else browser.new_context()
         except Exception as exc:
             self.close()
             raise ConnectionError(f"cannot connect CDP endpoint: {self.settings.cdp_url}") from exc
@@ -80,7 +86,9 @@ class BraveSession:
         if not dry_run:
             self.page().locator(selector).click()
 
-    def fill(self, selector: str, value: str, confirmed: bool = False, dry_run: bool = False) -> None:
+    def fill(
+        self, selector: str, value: str, confirmed: bool = False, dry_run: bool = False
+    ) -> None:
         require_confirmation("fill " + selector + " account", confirmed, dry_run)
         if not dry_run:
             self.page().locator(selector).fill(value)

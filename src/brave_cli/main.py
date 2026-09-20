@@ -1,5 +1,4 @@
 from pathlib import Path
-from typing import Annotated
 
 import typer
 from rich.console import Console
@@ -35,7 +34,11 @@ def doctor() -> None:
 
 
 @app.command()
-def start(config: Path | None = typer.Option(None), dry_run: bool = False, allow: list[str] = typer.Option([], "--allow-domain")) -> None:
+def start(
+    config: Path | None = typer.Option(None),
+    dry_run: bool = False,
+    allow: list[str] = typer.Option([], "--allow-domain"),
+) -> None:
     """Start Brave with persistent profile and connect CDP."""
     if dry_run:
         console.print("dry-run: Brave would start")
@@ -49,7 +52,9 @@ def start(config: Path | None = typer.Option(None), dry_run: bool = False, allow
 
 
 @app.command()
-def connect(config: Path | None = typer.Option(None), allow: list[str] = typer.Option([], "--allow-domain")) -> None:
+def connect(
+    config: Path | None = typer.Option(None), allow: list[str] = typer.Option([], "--allow-domain")
+) -> None:
     """Connect to existing CDP endpoint and verify it."""
     browser = session(config, False, allow)
     try:
@@ -60,7 +65,9 @@ def connect(config: Path | None = typer.Option(None), allow: list[str] = typer.O
 
 
 @app.command()
-def tabs(config: Path | None = typer.Option(None), allow: list[str] = typer.Option([], "--allow-domain")) -> None:
+def tabs(
+    config: Path | None = typer.Option(None), allow: list[str] = typer.Option([], "--allow-domain")
+) -> None:
     browser = session(config, False, allow)
     try:
         browser.connect()
@@ -75,7 +82,12 @@ def command_options(config: Path | None, dry_run: bool, allow: list[str]) -> Bra
 
 
 @tab_app.command("open")
-def tab_open(url: str, config: Path | None = typer.Option(None), dry_run: bool = False, allow: list[str] = typer.Option([], "--allow-domain")) -> None:
+def tab_open(
+    url: str,
+    config: Path | None = typer.Option(None),
+    dry_run: bool = False,
+    allow: list[str] = typer.Option([], "--allow-domain"),
+) -> None:
     browser = command_options(config, dry_run, allow)
     try:
         browser.connect()
@@ -85,7 +97,12 @@ def tab_open(url: str, config: Path | None = typer.Option(None), dry_run: bool =
 
 
 @app.command()
-def navigate(url: str, config: Path | None = typer.Option(None), dry_run: bool = False, allow: list[str] = typer.Option([], "--allow-domain")) -> None:
+def navigate(
+    url: str,
+    config: Path | None = typer.Option(None),
+    dry_run: bool = False,
+    allow: list[str] = typer.Option([], "--allow-domain"),
+) -> None:
     browser = command_options(config, dry_run, allow)
     try:
         browser.connect()
@@ -95,7 +112,13 @@ def navigate(url: str, config: Path | None = typer.Option(None), dry_run: bool =
 
 
 @app.command()
-def click(selector: str, confirm: bool = False, config: Path | None = typer.Option(None), dry_run: bool = False, allow: list[str] = typer.Option([], "--allow-domain")) -> None:
+def click(
+    selector: str,
+    confirm: bool = False,
+    config: Path | None = typer.Option(None),
+    dry_run: bool = False,
+    allow: list[str] = typer.Option([], "--allow-domain"),
+) -> None:
     browser = command_options(config, dry_run, allow)
     try:
         browser.connect()
@@ -105,7 +128,14 @@ def click(selector: str, confirm: bool = False, config: Path | None = typer.Opti
 
 
 @app.command()
-def fill(selector: str, value: str, confirm: bool = False, config: Path | None = typer.Option(None), dry_run: bool = False, allow: list[str] = typer.Option([], "--allow-domain")) -> None:
+def fill(
+    selector: str,
+    value: str,
+    confirm: bool = False,
+    config: Path | None = typer.Option(None),
+    dry_run: bool = False,
+    allow: list[str] = typer.Option([], "--allow-domain"),
+) -> None:
     browser = command_options(config, dry_run, allow)
     try:
         browser.connect()
@@ -115,7 +145,12 @@ def fill(selector: str, value: str, confirm: bool = False, config: Path | None =
 
 
 @page_app.command("screenshot")
-def screenshot(filename: Path, config: Path | None = typer.Option(None), dry_run: bool = False, allow: list[str] = typer.Option([], "--allow-domain")) -> None:
+def screenshot(
+    filename: Path,
+    config: Path | None = typer.Option(None),
+    dry_run: bool = False,
+    allow: list[str] = typer.Option([], "--allow-domain"),
+) -> None:
     browser = command_options(config, dry_run, allow)
     try:
         browser.connect()
@@ -125,7 +160,13 @@ def screenshot(filename: Path, config: Path | None = typer.Option(None), dry_run
 
 
 @app.command()
-def evaluate(javascript: str, confirm: bool = False, config: Path | None = typer.Option(None), dry_run: bool = False, allow: list[str] = typer.Option([], "--allow-domain")) -> None:
+def evaluate(
+    javascript: str,
+    confirm: bool = False,
+    config: Path | None = typer.Option(None),
+    dry_run: bool = False,
+    allow: list[str] = typer.Option([], "--allow-domain"),
+) -> None:
     browser = command_options(config, dry_run, allow)
     try:
         browser.connect()
@@ -137,7 +178,13 @@ def evaluate(javascript: str, confirm: bool = False, config: Path | None = typer
 
 
 @app.command()
-def run(workflow: Path, confirm: bool = False, config: Path | None = typer.Option(None), dry_run: bool = False, allow: list[str] = typer.Option([], "--allow-domain")) -> None:
+def run(
+    workflow: Path,
+    confirm: bool = False,
+    config: Path | None = typer.Option(None),
+    dry_run: bool = False,
+    allow: list[str] = typer.Option([], "--allow-domain"),
+) -> None:
     browser = command_options(config, dry_run, allow)
     try:
         browser.connect()

@@ -3,9 +3,15 @@ from urllib.parse import urlparse
 
 from .errors import PolicyError
 
-SENSITIVE = re.compile(r"(?i)(password|passwd|secret|token|cookie|authorization|api[_-]?key)\s*[:=]\s*[^\s,;]+")
-UNSAFE_JS = re.compile(r"(?i)(document\.cookie|localStorage|sessionStorage|indexedDB|fetch\s*\(|XMLHttpRequest|navigator\.credentials)")
-RISKY = re.compile(r"(?i)\b(send|publish|purchase|buy|delete|remove|upload|download|account|password|credential|submit)\b")
+SENSITIVE = re.compile(
+    r"(?i)(password|passwd|secret|token|cookie|authorization|api[_-]?key)\s*[:=]\s*[^\s,;]+"
+)
+UNSAFE_JS = re.compile(
+    r"(?i)(document\.cookie|localStorage|sessionStorage|indexedDB|fetch\s*\(|XMLHttpRequest|navigator\.credentials)"
+)
+RISKY = re.compile(
+    r"(?i)\b(send|publish|purchase|buy|delete|remove|upload|download|account|password|credential|submit)\b"
+)
 
 
 def mask(value: object) -> str:
@@ -16,7 +22,10 @@ def domain_allowed(url: str, allowed_domains: list[str]) -> bool:
     hostname = (urlparse(url).hostname or "").lower().rstrip(".")
     if not hostname or not allowed_domains:
         return False
-    return any(hostname == domain or hostname.endswith(f".{domain.lstrip('.')}".lower()) for domain in allowed_domains)
+    return any(
+        hostname == domain or hostname.endswith(f".{domain.lstrip('.')}".lower())
+        for domain in allowed_domains
+    )
 
 
 def require_allowed(url: str, allowed_domains: list[str], dry_run: bool = False) -> None:

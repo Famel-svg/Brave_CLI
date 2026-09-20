@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -27,7 +27,7 @@ class Settings(BaseSettings):
 
 
 def load_settings(config_file: Path | None = None, **overrides: object) -> Settings:
-    values: dict[str, object] = {}
+    values: dict[str, Any] = {}
     if config_file:
         import tomllib
 
