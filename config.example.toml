@@ -1,0 +1,5 @@
+[brave_cli]
+cdp_url = "http://127.0.0.1:9222"
+cdp_port = 9222
+allowed_domains = ["example.com"]
+dry_run = false

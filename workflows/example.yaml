@@ -1,0 +1,5 @@
+steps:
+  - navigate:
+      url: "https://example.com"
+  - screenshot:
+      file: "example.png"

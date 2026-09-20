@@ -1,0 +1,40 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "brave-cli-control"
+version = "0.1.0"
+description = "Safe local Brave browser control through Playwright and Chrome DevTools Protocol"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = ["playwright>=1.50", "pydantic>=2.9", "pydantic-settings>=2.6", "rich>=13.9", "typer>=0.15", "PyYAML>=6.0"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.3", "pytest-cov>=6.0", "ruff>=0.8", "mypy>=1.13", "pyright>=1.1.390", "build>=1.2"]
+
+[project.scripts]
+brave-cli = "brave_cli.main:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/brave_cli"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+select = ["E", "F", "I", "UP", "B", "S"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = ["pydantic.mypy"]
+
+[tool.pyright]
+include = ["src", "tests"]
+pythonVersion = "3.12"
+typeCheckingMode = "strict"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["integration: requires local CDP", "e2e: requires local Brave"]
+addopts = "--strict-markers"
