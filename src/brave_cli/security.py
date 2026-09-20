@@ -9,6 +9,9 @@ SENSITIVE = re.compile(
 UNSAFE_JS = re.compile(
     r"(?i)(document\.cookie|localStorage|sessionStorage|indexedDB|fetch\s*\(|XMLHttpRequest|navigator\.credentials)"
 )
+SECRET_JS = re.compile(
+    r"(?i)(document\.cookie|localStorage|sessionStorage|indexedDB|navigator\.credentials)"
+)
 RISKY = re.compile(
     r"(?i)\b(send|publish|purchase|buy|delete|remove|upload|download|account|password|credential|submit)\b"
 )
@@ -43,5 +46,7 @@ def require_confirmation(description: str, confirmed: bool, dry_run: bool = Fals
 
 
 def require_safe_javascript(script: str, confirmed: bool, dry_run: bool = False) -> None:
+    if SECRET_JS.search(script):
+        raise PolicyError("JavaScript access to cookies, storage, or credentials is blocked")
     if UNSAFE_JS.search(script) and not (confirmed and not dry_run):
         raise PolicyError("unsafe JavaScript requires explicit confirmation")
