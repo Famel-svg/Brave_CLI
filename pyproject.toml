@@ -39,3 +39,7 @@ typeCheckingMode = "strict"
 testpaths = ["tests"]
 markers = ["integration: requires local CDP", "e2e: requires local Brave"]
 addopts = "--strict-markers"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "S"]
+ignore = ["B008", "S101"]
