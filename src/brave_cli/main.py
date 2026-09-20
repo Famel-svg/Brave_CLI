@@ -209,7 +209,7 @@ def main() -> None:
         app()
     except BraveCliError as exc:
         console.print(f"error: {mask(exc)}")
-        raise typer.Exit(code=2) from exc
+        raise SystemExit(2) from None
 
 
 if __name__ == "__main__":
