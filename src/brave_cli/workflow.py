@@ -14,7 +14,7 @@ def run_workflow(path: Path, session: BraveSession, confirmed: bool = False) -> 
     results: list[object] = []
     steps = cast(list[Any], data["steps"])
     for raw_step in steps:
-        if not isinstance(raw_step, dict) or len(raw_step) != 1:
+        if not isinstance(raw_step, dict) or len(cast(dict[str, Any], raw_step)) != 1:
             raise BraveCliError("each workflow step must contain exactly one action")
         step = cast(dict[str, Any], raw_step)
         action, raw_args = next(iter(step.items()))
