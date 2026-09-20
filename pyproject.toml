@@ -14,7 +14,7 @@ dependencies = ["playwright>=1.50", "pydantic>=2.9", "pydantic-settings>=2.6", "
 dev = ["pytest>=8.3", "pytest-cov>=6.0", "ruff>=0.8", "mypy>=1.13", "pyright>=1.1.390", "build>=1.2"]
 
 [project.scripts]
-brave-cli = "brave_cli.main:app"
+brave-cli = "brave_cli.main:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/brave_cli"]

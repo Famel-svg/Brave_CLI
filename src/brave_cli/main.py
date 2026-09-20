@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 
 import typer
@@ -16,6 +17,13 @@ tab_app = typer.Typer(no_args_is_help=True)
 app.add_typer(page_app, name="page")
 app.add_typer(tab_app, name="tab")
 console = Console(stderr=True)
+logger = logging.getLogger("brave_cli")
+
+
+def configure_logging(level: str) -> None:
+    logging.basicConfig(
+        level=getattr(logging, level.upper(), logging.INFO), format="%(levelname)s %(message)s"
+    )
 
 
 def settings(config: Path | None, dry_run: bool, allow: list[str]) -> Settings:
@@ -23,7 +31,10 @@ def settings(config: Path | None, dry_run: bool, allow: list[str]) -> Settings:
 
 
 def session(config: Path | None, dry_run: bool, allow: list[str]) -> BraveSession:
-    return BraveSession(settings(config, dry_run, allow))
+    current = settings(config, dry_run, allow)
+    configure_logging(current.log_level)
+    logger.info("browser command requested; sensitive values omitted")
+    return BraveSession(current)
 
 
 @app.command()
