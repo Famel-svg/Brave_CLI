@@ -1,4 +1,4 @@
-import { normalizeBridgeToken } from './token.mjs';
+import { normalizeBridgeToken, tokensMatchByFingerprint } from './token.mjs';
 
 const input = document.querySelector('#token');
 const status = document.querySelector('#status');
@@ -77,6 +77,43 @@ document.querySelector('#import').addEventListener('click', async () => {
     tokenFile.value = '';
   }
   await saveToken(contents);
+});
+
+document.querySelector('#compare').addEventListener('click', async () => {
+  const file = tokenFile.files?.[0];
+  if (!file) {
+    status.textContent = 'Choose the local bridge.token file to compare.';
+    return;
+  }
+  if (file.size > 8192) {
+    status.textContent = 'Token file exceeds the 8192-byte limit.';
+    tokenFile.value = '';
+    return;
+  }
+
+  let fileToken;
+  try {
+    fileToken = normalizeBridgeToken(await file.text());
+  } catch {
+    status.textContent = 'Token file is invalid or could not be read.';
+    tokenFile.value = '';
+    return;
+  }
+  tokenFile.value = '';
+
+  try {
+    const { bridgeToken = '' } = await chrome.storage.local.get('bridgeToken');
+    if (!bridgeToken) {
+      status.textContent = 'No token is saved in this extension.';
+      return;
+    }
+    const matches = await tokensMatchByFingerprint(fileToken, bridgeToken);
+    status.textContent = matches
+      ? 'MATCH: saved extension token matches local bridge.token.'
+      : 'MISMATCH: saved extension token differs from local bridge.token.';
+  } catch {
+    status.textContent = 'Could not compare tokens locally.';
+  }
 });
 
 void refreshBridgeStatus();
