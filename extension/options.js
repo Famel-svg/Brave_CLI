@@ -6,6 +6,27 @@ const tokenFile = document.querySelector('#token-file');
 const saved = await chrome.storage.local.get('bridgeToken');
 input.value = saved.bridgeToken || '';
 
+async function refreshBridgeStatus() {
+  try {
+    const state = await chrome.runtime.sendMessage({ type: 'ui.status' });
+    if (state?.authenticated) {
+      status.textContent = 'Bridge authenticated and ready.';
+    } else if (state?.bridgeError) {
+      status.textContent = `Bridge disconnected: ${state.bridgeError}`;
+    } else if (state?.bridgeConnected) {
+      status.textContent = 'Bridge connected; waiting for authentication…';
+    } else {
+      status.textContent = 'Bridge disconnected; waiting for connection…';
+    }
+  } catch {
+    status.textContent = 'Could not read bridge status.';
+  }
+}
+
+chrome.runtime.onMessage.addListener((message) => {
+  if (message?.type === 'ui.changed') void refreshBridgeStatus();
+});
+
 async function saveToken(value) {
   let token;
   try {
@@ -23,6 +44,7 @@ async function saveToken(value) {
   try {
     await chrome.runtime.sendMessage({ type: 'bridge.reconnect' });
     status.textContent = 'Token saved locally. Reconnecting to the bridge…';
+    void refreshBridgeStatus();
   } catch {
     status.textContent = 'Token saved locally, but reconnect failed. Reload the extension and retry.';
   }
@@ -53,3 +75,5 @@ document.querySelector('#import').addEventListener('click', async () => {
   }
   await saveToken(contents);
 });
+
+void refreshBridgeStatus();
