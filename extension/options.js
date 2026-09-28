@@ -35,14 +35,17 @@ async function saveToken(value) {
     status.textContent = error.message;
     return;
   }
+  let tokenUnchanged = false;
   try {
+    const saved = await chrome.storage.local.get('bridgeToken');
+    tokenUnchanged = saved.bridgeToken === token;
     await chrome.storage.local.set({ bridgeToken: token });
   } catch {
     status.textContent = 'Could not save token in extension storage.';
     return;
   }
   try {
-    await chrome.runtime.sendMessage({ type: 'bridge.reconnect' });
+    if (tokenUnchanged) await chrome.runtime.sendMessage({ type: 'bridge.reconnect' });
     status.textContent = 'Token saved locally. Reconnecting to the bridge…';
     void refreshBridgeStatus();
   } catch {
@@ -58,8 +61,8 @@ document.querySelector('#import').addEventListener('click', async () => {
     status.textContent = 'Choose the bridge.token file first.';
     return;
   }
-  if (file.size > 4096) {
-    status.textContent = 'Token file exceeds the 4096-byte limit.';
+  if (file.size > 8192) {
+    status.textContent = 'Token file exceeds the 8192-byte limit.';
     tokenFile.value = '';
     return;
   }

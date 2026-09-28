@@ -30,6 +30,10 @@ async function connectBridge() {
     reconnectDelay = 500;
     try {
       const { bridgeToken = '' } = await chrome.storage.local.get('bridgeToken');
+      if (socket !== ws) {
+        ws.close(1000, 'superseded connection');
+        return;
+      }
       ws.send(JSON.stringify({ type: 'hello', protocol: 1, token: bridgeToken }));
       notifyPopup();
     } catch (e) {
@@ -38,6 +42,7 @@ async function connectBridge() {
     }
   });
   ws.addEventListener('message', (event) => {
+    if (socket !== ws) return;
     if (typeof event.data !== 'string' || event.data.length > MAX_MESSAGE_CHARS) {
       ws.close(1009, 'Message too large');
       return;
@@ -66,9 +71,14 @@ async function connectBridge() {
         });
     }
   });
-  ws.addEventListener('error', () => { bridgeError = 'Cannot reach ws://127.0.0.1:9229'; notifyPopup(); });
+  ws.addEventListener('error', () => {
+    if (socket !== ws) return;
+    bridgeError = 'Cannot reach ws://127.0.0.1:9229';
+    notifyPopup();
+  });
   ws.addEventListener('close', () => {
-    if (socket === ws) socket = null;
+    if (socket !== ws) return;
+    socket = null;
     authenticated = false;
     notifyPopup();
     if (authRejected) return;
@@ -76,6 +86,19 @@ async function connectBridge() {
     reconnectDelay = Math.min(reconnectDelay * 2, 15_000);
     setTimeout(connectBridge, wait);
   });
+}
+
+function reconnectBridge() {
+  authRejected = false;
+  authenticated = false;
+  bridgeError = '';
+  const previous = socket;
+  socket = null;
+  if (previous && previous.readyState !== WebSocket.CLOSED) {
+    try { previous.close(1000, 'reconnect requested'); } catch {}
+  }
+  connectBridge();
+  notifyPopup();
 }
 
 setInterval(() => {
@@ -89,13 +112,7 @@ chrome.runtime.onInstalled.addListener(() => connectBridge());
 chrome.runtime.onStartup.addListener(() => connectBridge());
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'local' && changes.bridgeToken) {
-    authRejected = false;
-    authenticated = false;
-    if (socket?.readyState === WebSocket.OPEN) {
-      send({ type: 'hello', protocol: 1, token: changes.bridgeToken.newValue || '' });
-    } else {
-      connectBridge();
-    }
+    reconnectBridge();
   }
 });
 
@@ -141,10 +158,7 @@ chrome.runtime.onMessage.addListener((message, _sender, respond) => {
     return true;
   }
   if (message.type === 'bridge.reconnect') {
-    authRejected = false;
-    authenticated = false;
-    if (socket && socket.readyState !== WebSocket.CLOSED) socket.close(1000, 'reconnect requested');
-    else connectBridge();
+    reconnectBridge();
     respond({ ok: true });
     return;
   }
