@@ -708,7 +708,9 @@ async fn call_browser_tool(
     let sender = connection
         .borrow()
         .clone()
-        .context("Brave extension is not connected. Click Connect in its toolbar popup on the tab you want to share.")?;
+        .context(
+            "Brave bridge is disconnected. Use Reconnect bridge in the extension popup; then choose Attach to current tab to share a tab.",
+        )?;
     let (reply, receive) = oneshot::channel();
     sender
         .send(BridgeCommand {

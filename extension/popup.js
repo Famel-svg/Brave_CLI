@@ -1,6 +1,7 @@
 const connection = document.querySelector('#connection');
 const tabLabel = document.querySelector('#tab');
 const error = document.querySelector('#error');
+const reconnectButton = document.querySelector('#reconnect');
 const attachButton = document.querySelector('#attach');
 const detachButton = document.querySelector('#detach');
 
@@ -26,6 +27,21 @@ attachButton.addEventListener('click', async () => {
   } catch (e) {
     error.textContent = e.message;
     await refresh();
+  }
+});
+
+reconnectButton.addEventListener('click', async () => {
+  error.textContent = '';
+  reconnectButton.disabled = true;
+  try {
+    const result = await chrome.runtime.sendMessage({ type: 'bridge.reconnect' });
+    if (result?.error) throw new Error(result.error);
+    await refresh();
+    connection.textContent = 'Reconnecting to local bridge…';
+  } catch (e) {
+    error.textContent = e.message;
+  } finally {
+    reconnectButton.disabled = false;
   }
 });
 

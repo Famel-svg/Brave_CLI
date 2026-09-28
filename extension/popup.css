@@ -5,5 +5,6 @@ h1 { margin: 0 0 12px; font-size: 17px; }
 #connection, #tab { overflow-wrap: anywhere; }
 .actions { display: flex; gap: 8px; }
 button { flex: 1; min-height: 36px; }
+#reconnect { width: 100%; min-height: 36px; }
 .note { color: GrayText; font-size: 12px; }
 #error { color: #c33; white-space: pre-wrap; }
