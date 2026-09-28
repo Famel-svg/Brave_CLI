@@ -10,10 +10,13 @@
   <main>
     <h1>Local bridge settings</h1>
     <p>Bridge endpoint fixed to <code>ws://127.0.0.1:9229</code>.</p>
-    <label for="token">Optional shared token</label>
+    <label for="token">Bridge token</label>
     <input id="token" type="password" autocomplete="off" spellcheck="false">
-    <p class="warning">The debugger permission grants broad CDP access to attached tabs. Only attach tabs you intend to let the local bridge control.</p>
     <button id="save" type="button">Save token</button>
+    <p>Or import the local token file created by <code>brave-cli bridge-token</code>.</p>
+    <input id="token-file" type="file" accept=".token,.txt,text/plain">
+    <button id="import" type="button">Import token file and connect</button>
+    <p class="warning">The debugger permission grants broad CDP access to attached tabs. Only attach tabs you intend to let the local bridge control.</p>
     <output id="status" aria-live="polite"></output>
   </main>
   <script src="options.js" type="module"></script>

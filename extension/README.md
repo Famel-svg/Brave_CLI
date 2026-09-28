@@ -5,7 +5,7 @@ Extension attaches only after user clicks **Attach to current tab**. It never at
 ## Install in Brave
 
 1. Build/install Rust CLI: `cargo install --path .`.
-2. Run `brave-cli bridge-token` in a local terminal. Copy token into extension Settings. Keep token private; it authenticates the local browser-control bridge.
+2. Run `brave-cli bridge-token` in a local terminal. In extension Settings, either paste its output and save, or choose the generated `bridge.token` file with **Import token file and connect**. Import reads the selected file locally, trims surrounding whitespace, validates its hexadecimal format, and stores it in `chrome.storage.local`; token is not displayed or logged. Keep token private; it authenticates the local browser-control bridge.
 3. Open `brave://extensions`, enable **Developer mode**, choose **Load unpacked**, select this `extension/` directory. Copy the extension ID shown there.
 4. Add MCP server to Codex config with `brave-cli mcp --extension-id <id>` and restart Codex. Server listens only on `127.0.0.1:9229`.
 5. Open extension **Details** and pin it if desired. Read debugger permission warning: `debugger` grants broad DevTools Protocol access to attached tabs, including page inspection and actions.
