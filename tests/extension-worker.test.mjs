@@ -42,9 +42,10 @@ class FakeWebSocket {
   }
 }
 
-async function createWorker(initialToken) {
+async function createWorker(initialToken, { deferStorage = false } = {}) {
   FakeWebSocket.instances = [];
   let savedToken = initialToken;
+  let resolveInitialStorage;
   const pendingTimers = [];
   let heartbeat;
   const runtimeMessages = new EventHook();
@@ -57,7 +58,14 @@ async function createWorker(initialToken) {
       sendMessage: async () => undefined,
     },
     storage: {
-      local: { get: async () => ({ bridgeToken: savedToken }) },
+      local: {
+        get: () => deferStorage
+          ? new Promise(resolve => {
+            const observedToken = savedToken;
+            resolveInitialStorage = () => resolve({ bridgeToken: observedToken });
+          })
+          : Promise.resolve({ bridgeToken: savedToken }),
+      },
       onChanged: storageChanges,
     },
     debugger: { onDetach: new EventHook() },
@@ -72,8 +80,14 @@ async function createWorker(initialToken) {
     setTimeout: (callback, delay) => { pendingTimers.push({ callback, delay }); return pendingTimers.length; },
   }, { filename: 'service-worker.js' });
 
+  if (!deferStorage) await new Promise(resolve => setImmediate(resolve));
+
   return {
     get sockets() { return FakeWebSocket.instances; },
+    loadInitialStorage() {
+      assert.ok(resolveInitialStorage, 'expected storage read to be pending');
+      resolveInitialStorage({ bridgeToken: savedToken });
+    },
     setSavedToken(value) { savedToken = value; },
     emitStorageChange(changes) { storageChanges.emit(changes, 'local'); },
     sendRuntimeMessage(message) {
@@ -137,5 +151,38 @@ test('reconnects with newly stored token after storage change', async () => {
   const second = worker.sockets[1];
   await authenticate(second, true);
   assert.equal(second.sent[0].token, newToken);
+  assert.equal(worker.sendRuntimeMessage({ type: 'ui.status' }).authenticated, true);
+});
+
+test('waits for extension storage before opening bridge socket', async () => {
+  const token = 'd'.repeat(32);
+  const worker = await createWorker(token, { deferStorage: true });
+  assert.equal(worker.sockets.length, 0);
+
+  worker.loadInitialStorage();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(worker.sockets.length, 1);
+
+  const socket = worker.sockets[0];
+  await authenticate(socket, true);
+  assert.equal(socket.sent[0].token, token);
+  assert.equal(worker.sendRuntimeMessage({ type: 'ui.status' }).authenticated, true);
+});
+
+test('does not overwrite token change with a stale startup storage read', async () => {
+  const oldToken = 'e'.repeat(32);
+  const newToken = 'f'.repeat(32);
+  const worker = await createWorker(oldToken, { deferStorage: true });
+  worker.setSavedToken(newToken);
+  worker.emitStorageChange({ bridgeToken: { newValue: newToken } });
+  assert.equal(worker.sockets.length, 1);
+
+  worker.loadInitialStorage();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(worker.sockets.length, 1);
+
+  const socket = worker.sockets[0];
+  await authenticate(socket, true);
+  assert.equal(socket.sent[0].token, newToken);
   assert.equal(worker.sendRuntimeMessage({ type: 'ui.status' }).authenticated, true);
 });

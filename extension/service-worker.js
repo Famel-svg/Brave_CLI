@@ -11,7 +11,8 @@ let authRejected = false;
 let tokenMismatch = false;
 let bridgeToken = '';
 let tokenLoaded = false;
-const WORKER_BUILD = '0.1.1';
+let storageRevision = 0;
+const WORKER_BUILD = '0.1.2';
 
 const notifyPopup = () => chrome.runtime.sendMessage({ type: 'ui.changed' }).catch(() => {});
 const safeError = (e) => String(e?.message || e).slice(0, 500);
@@ -90,7 +91,7 @@ async function connectBridge() {
     socket = null;
     authenticated = false;
     notifyPopup();
-    if (authRejected) return;
+    if (authRejected || tokenMismatch) return;
     const wait = reconnectDelay;
     reconnectDelay = Math.min(reconnectDelay * 2, 15_000);
     setTimeout(connectBridge, wait);
@@ -107,7 +108,7 @@ function reconnectBridge() {
   if (previous && previous.readyState !== WebSocket.CLOSED) {
     try { previous.close(1000, 'reconnect requested'); } catch {}
   }
-  setTimeout(connectBridge, 0);
+  connectBridge();
   notifyPopup();
 }
 
@@ -120,16 +121,19 @@ connectBridge();
 
 chrome.runtime.onInstalled.addListener(() => connectBridge());
 chrome.runtime.onStartup.addListener(() => connectBridge());
+const startupStorageRevision = storageRevision;
 chrome.storage.local.get('bridgeToken').then(({ bridgeToken: savedToken = '' }) => {
-  bridgeToken = savedToken;
+  if (storageRevision === startupStorageRevision) bridgeToken = savedToken;
   tokenLoaded = true;
   connectBridge();
 }).catch((error) => {
+  if (storageRevision !== startupStorageRevision) return;
   bridgeError = safeError(error);
   notifyPopup();
 });
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'local' && changes.bridgeToken) {
+    storageRevision += 1;
     bridgeToken = changes.bridgeToken.newValue || '';
     tokenLoaded = true;
     tokenMismatch = false;
