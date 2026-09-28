@@ -7,6 +7,9 @@ __pycache__/
 .pyright/
 htmlcov/
 dist/
+target/
+.rust-toolchain/
+.tmp-brave-profile*/
 build/
 *.egg-info/
 smoke.png
