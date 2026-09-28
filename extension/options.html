@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Brave Browser Bridge settings</title>
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <main>
+    <h1>Local bridge settings</h1>
+    <p>Bridge endpoint fixed to <code>ws://127.0.0.1:9229</code>.</p>
+    <label for="token">Optional shared token</label>
+    <input id="token" type="password" autocomplete="off" spellcheck="false">
+    <p class="warning">The debugger permission grants broad CDP access to attached tabs. Only attach tabs you intend to let the local bridge control.</p>
+    <button id="save" type="button">Save token</button>
+    <output id="status" aria-live="polite"></output>
+  </main>
+  <script src="options.js" type="module"></script>
+</body>
+</html>

@@ -1,0 +1,7 @@
+:root { color-scheme: light dark; font: 15px system-ui, sans-serif; }
+body { max-width: 620px; margin: 48px auto; padding: 0 20px; }
+main { display: grid; gap: 12px; }
+input { min-height: 36px; padding: 4px 8px; }
+button { width: max-content; min-height: 36px; padding: 4px 14px; }
+.warning { border-left: 4px solid #c80; padding: 8px 12px; }
+output { min-height: 1em; }

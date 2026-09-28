@@ -2,6 +2,32 @@
 
 Rust CLI for safe local Brave automation over Chrome DevTools Protocol (CDP). Version 0.2 adds page inspection in terminal or JSON; no screenshot required.
 
+## Use the Brave session you already have open
+
+The recommended AI connection is the Manifest V3 extension in `extension/`. It reuses your existing Brave profile and login state; it does not copy the profile, restart Brave, or open a second browser. The extension attaches only after you click **Attach to current tab**. MCP tools then expose that tab's semantic inspection, navigation, and open-in-new-tab actions.
+
+```powershell
+cargo install --path .
+brave-cli bridge-token
+```
+
+Load `extension/` unpacked from `brave://extensions`, copy its displayed ID, then add this MCP server to Codex configuration and restart Codex:
+
+```json
+{
+  "mcpServers": {
+    "brave-browser": {
+      "command": "C:\\Users\\<user>\\.cargo\\bin\\brave-cli.exe",
+      "args": ["mcp", "--extension-id", "<extension-id>"]
+    }
+  }
+}
+```
+
+Paste the local pairing token into the extension's Settings page. Keep it private. Select a Brave tab and click **Attach to current tab**; call **Detach** when done. The extension's `debugger` permission is powerful and applies to attached tabs. The bridge binds only to loopback, pins the extension ID, requires the token, and rejects local/private IP URLs. It cannot inspect browser chrome or all rendered pixels.
+
+See [extension setup and protocol](extension/README.md) and [browser connection research](docs/browser-connection-research.md).
+
 ## Inspect without screenshots
 
 ```powershell
@@ -15,7 +41,7 @@ brave-cli inspect --format dom
 
 ## Connect and control
 
-Start Brave with CDP enabled, using a dedicated profile:
+Optional isolated-profile fallback for testing (does not reuse your normal Brave session):
 
 ```powershell
 brave.exe --remote-debugging-port=9222 --user-data-dir="$env:LOCALAPPDATA\brave-cli-control\profile" about:blank
@@ -50,11 +76,11 @@ cargo test
 cargo build --release
 ```
 
-Live CDP smoke test needs a disposable Brave profile started with remote debugging. Never target a personal browser profile in automation tests.
+Live CDP tests use a disposable Brave profile. The extension is the path for the existing personal session; verify it manually on the target Brave build before relying on it.
 
 ## Existing CLI features
 
-Rust CLI also supports `start`, `tabs`, `navigate`, `tab open`, `click`, `fill`, `evaluate`, and YAML `run` with optional screenshot steps. `start` uses a dedicated persistent profile and never picks personal Brave profile. `inspect` supplies text/tree output without images.
+Rust CLI also supports `start`, `tabs`, `navigate`, `tab open`, `click`, `fill`, `evaluate`, and YAML `run` with optional screenshot steps for an explicitly debug-enabled browser. `start` is isolated-profile fallback. `inspect` supplies text/tree output without images.
 
 ```powershell
 brave-cli evaluate 'document.title'
