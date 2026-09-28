@@ -46,6 +46,7 @@ async function createWorker(initialToken) {
   FakeWebSocket.instances = [];
   let savedToken = initialToken;
   const pendingTimers = [];
+  let heartbeat;
   const runtimeMessages = new EventHook();
   const storageChanges = new EventHook();
   const chrome = {
@@ -67,7 +68,7 @@ async function createWorker(initialToken) {
   vm.runInNewContext(source, {
     chrome,
     WebSocket: FakeWebSocket,
-    setInterval: () => 1,
+    setInterval: callback => { heartbeat = callback; return 1; },
     setTimeout: (callback, delay) => { pendingTimers.push({ callback, delay }); return pendingTimers.length; },
   }, { filename: 'service-worker.js' });
 
@@ -86,6 +87,7 @@ async function createWorker(initialToken) {
       timer.callback();
       return timer.delay;
     },
+    heartbeat() { heartbeat(); },
   };
 }
 
@@ -104,6 +106,8 @@ test('retries after rejected handshake when reconnect is requested', async () =>
 
   assert.equal(first.sent[0].token, dummyToken);
   assert.equal(worker.sendRuntimeMessage({ type: 'ui.status' }).bridgeError, 'authentication failed');
+  worker.heartbeat();
+  assert.equal(worker.sockets.length, 1, 'heartbeat must not retry rejected credentials');
   assert.equal(worker.sendRuntimeMessage({ type: 'bridge.reconnect' }).ok, true);
   assert.equal(worker.sockets.length, 2);
 

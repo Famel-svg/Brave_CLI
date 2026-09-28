@@ -576,6 +576,24 @@ fn read_bridge_token() -> Result<String> {
     load_or_create_bridge_token()
 }
 
+fn validate_bridge_hello(
+    text: &str,
+    expected_token: &str,
+) -> std::result::Result<(), &'static str> {
+    let value =
+        serde_json::from_str::<serde_json::Value>(text).map_err(|_| "invalid hello JSON")?;
+    if value["type"] != "hello" {
+        return Err("invalid hello message");
+    }
+    if value["protocol"] != 1 {
+        return Err("unsupported bridge protocol");
+    }
+    if value["token"].as_str() != Some(expected_token) {
+        return Err("token mismatch");
+    }
+    Ok(())
+}
+
 async fn serve_extension_bridge(
     listener: TcpListener,
     token: String,
@@ -612,16 +630,12 @@ async fn serve_extension_bridge(
             continue;
         };
         let hello = tokio::time::timeout(Duration::from_secs(5), socket.next()).await;
-        let valid_hello = matches!(hello,
-            Ok(Some(Ok(Message::Text(ref text))))
-                if serde_json::from_str::<serde_json::Value>(text).is_ok_and(|value|
-                    value["type"] == "hello"
-                        && value["protocol"] == 1
-                        && value["token"].as_str() == Some(token.as_str()))
-        );
-        if !valid_hello {
-            let rejection =
-                serde_json::json!({"type":"hello","ok":false,"error":"authentication failed"});
+        let rejection_reason = match hello {
+            Ok(Some(Ok(Message::Text(text)))) => validate_bridge_hello(&text, &token).err(),
+            _ => Some("missing or invalid hello frame"),
+        };
+        if let Some(reason) = rejection_reason {
+            let rejection = serde_json::json!({"type":"hello","ok":false,"error":reason});
             let _ = socket
                 .send(Message::Text(rejection.to_string().into()))
                 .await;
@@ -1058,6 +1072,30 @@ async fn main() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn bridge_hello_reports_safe_auth_failure_categories() {
+        let token = "a".repeat(32);
+        let valid = serde_json::json!({"type":"hello","protocol":1,"token":token});
+        assert_eq!(validate_bridge_hello(&valid.to_string(), &token), Ok(()));
+
+        let mismatch = serde_json::json!({"type":"hello","protocol":1,"token":"b".repeat(32)});
+        assert_eq!(
+            validate_bridge_hello(&mismatch.to_string(), &"a".repeat(32)),
+            Err("token mismatch")
+        );
+
+        let wrong_protocol =
+            serde_json::json!({"type":"hello","protocol":2,"token":"a".repeat(32)});
+        assert_eq!(
+            validate_bridge_hello(&wrong_protocol.to_string(), &"a".repeat(32)),
+            Err("unsupported bridge protocol")
+        );
+        assert_eq!(
+            validate_bridge_hello("not-json", &token),
+            Err("invalid hello JSON")
+        );
+    }
+
     use super::*;
     use async_tungstenite::tungstenite::{client::IntoClientRequest, http::HeaderValue};
 

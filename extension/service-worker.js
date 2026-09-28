@@ -21,6 +21,7 @@ function send(payload) {
 }
 
 async function connectBridge() {
+  if (authRejected) return;
   if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return;
   const ws = new WebSocket(WS_URL);
   socket = ws;
@@ -104,7 +105,7 @@ function reconnectBridge() {
 setInterval(() => {
   if (socket?.readyState === WebSocket.OPEN) {
     try { send({ type: 'ping', at: Date.now() }); } catch {}
-  } else connectBridge();
+  } else if (!authRejected) connectBridge();
 }, HEARTBEAT_MS);
 connectBridge();
 
