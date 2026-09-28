@@ -9,7 +9,9 @@ htmlcov/
 dist/
 target/
 .rust-toolchain/
-.tmp-brave-profile*/
+.tmp-*
+.claude-flow/
+.swarm/
 build/
 *.egg-info/
 smoke.png

@@ -21,12 +21,14 @@ Start Brave with CDP enabled, using a dedicated profile:
 brave.exe --remote-debugging-port=9222 --user-data-dir="$env:LOCALAPPDATA\brave-cli-control\profile" about:blank
 brave-cli doctor
 brave-cli tabs
+brave-cli start
+brave-cli --allow-domain example.com tab open https://example.com
 brave-cli --allow-domain example.com navigate https://example.com
 brave-cli click 'button#submit' --confirm
 brave-cli fill '#name' 'Rafael' --confirm
 ```
 
-Config file (`--config config.toml`), environment (`BRAVE_CLI_CDP_URL`, `BRAVE_CLI_ALLOWED_DOMAINS`), then CLI allowlist apply. Navigation requires an exact or subdomain allowlist match. Click/fill require `--confirm`; `--dry-run` never connects or changes browser state. Never put secrets in shell history.
+Config file (`--config config.toml`), environment (`BRAVE_CLI_CDP_URL`, `BRAVE_CLI_ALLOWED_DOMAINS`), then CLI allowlist apply. Navigation and new tabs require an exact or subdomain allowlist match. Risky click/fill require `--confirm`; all page-context JavaScript requires `--confirm` because it can act with page permissions. A basic denylist catches common direct cookie/storage/credential access patterns; it is not a JavaScript sandbox. Do not run untrusted scripts. `--dry-run` never connects or changes browser state; for YAML workflows it applies to every step. Per-step `dry_run` is rejected.
 
 Config example:
 
@@ -49,6 +51,16 @@ cargo build --release
 ```
 
 Live CDP smoke test needs a disposable Brave profile started with remote debugging. Never target a personal browser profile in automation tests.
+
+## Existing CLI features
+
+Rust CLI also supports `start`, `tabs`, `navigate`, `tab open`, `click`, `fill`, `evaluate`, and YAML `run` with optional screenshot steps. `start` uses a dedicated persistent profile and never picks personal Brave profile. `inspect` supplies text/tree output without images.
+
+```powershell
+brave-cli evaluate 'document.title'
+brave-cli page screenshot page.png
+brave-cli --allow-domain example.com run workflows/example.yaml --dry-run
+```
 
 ## Migration
 
