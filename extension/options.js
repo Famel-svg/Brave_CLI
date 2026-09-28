@@ -12,11 +12,11 @@ async function refreshBridgeStatus() {
     if (state?.authenticated) {
       status.textContent = 'Bridge authenticated and ready.';
     } else if (state?.bridgeError) {
-      status.textContent = `Bridge disconnected: ${state.bridgeError}`;
+      status.textContent = `Bridge disconnected: ${state.bridgeError} (worker ${state?.workerBuild || 'unknown'})`;
     } else if (state?.bridgeConnected) {
       status.textContent = 'Bridge connected; waiting for authentication…';
     } else {
-      status.textContent = 'Bridge disconnected; waiting for connection…';
+      status.textContent = `Bridge disconnected; waiting for connection… (worker ${state?.workerBuild || 'unknown'})`;
     }
   } catch {
     status.textContent = 'Could not read bridge status.';

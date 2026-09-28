@@ -8,6 +8,10 @@ let attachedTab = null;
 let authenticated = false;
 let bridgeError = '';
 let authRejected = false;
+let tokenMismatch = false;
+let bridgeToken = '';
+let tokenLoaded = false;
+const WORKER_BUILD = '0.1.1';
 
 const notifyPopup = () => chrome.runtime.sendMessage({ type: 'ui.changed' }).catch(() => {});
 const safeError = (e) => String(e?.message || e).slice(0, 500);
@@ -21,7 +25,9 @@ function send(payload) {
 }
 
 async function connectBridge() {
+  if (!tokenLoaded) return;
   if (authRejected) return;
+  if (tokenMismatch) return;
   if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return;
   const ws = new WebSocket(WS_URL);
   socket = ws;
@@ -30,7 +36,6 @@ async function connectBridge() {
   ws.addEventListener('open', async () => {
     reconnectDelay = 500;
     try {
-      const { bridgeToken = '' } = await chrome.storage.local.get('bridgeToken');
       if (socket !== ws) {
         ws.close(1000, 'superseded connection');
         return;
@@ -45,24 +50,27 @@ async function connectBridge() {
   ws.addEventListener('message', (event) => {
     if (socket !== ws) return;
     if (typeof event.data !== 'string' || event.data.length > MAX_MESSAGE_CHARS) {
-      ws.close(1009, 'Message too large');
+      ws.close(4009, 'Message too large');
       return;
     }
     let message;
-    try { message = JSON.parse(event.data); } catch { ws.close(1007, 'Invalid JSON'); return; }
+    try { message = JSON.parse(event.data); } catch { ws.close(4007, 'Invalid JSON'); return; }
     if (message?.type === 'hello' && message.ok === true) {
       authenticated = true;
       authRejected = false;
+      tokenMismatch = false;
       bridgeError = '';
       notifyPopup();
       return;
     }
     if (message?.type === 'hello' && message.ok !== true) {
       authenticated = false;
-      authRejected = true;
       bridgeError = String(message.error || 'Authentication rejected').slice(0, 300);
+      tokenMismatch = bridgeError === 'token mismatch';
+      authRejected = !tokenMismatch;
       notifyPopup();
-      ws.close(1008, 'Authentication rejected');
+      // Browser WebSocket API reserves 1008; use an application-defined code.
+      ws.close(4008, bridgeError);
       return;
     }
     if (message?.type === 'request' && typeof message.id === 'string') {
@@ -91,6 +99,7 @@ async function connectBridge() {
 
 function reconnectBridge() {
   authRejected = false;
+  tokenMismatch = false;
   authenticated = false;
   bridgeError = '';
   const previous = socket;
@@ -98,7 +107,7 @@ function reconnectBridge() {
   if (previous && previous.readyState !== WebSocket.CLOSED) {
     try { previous.close(1000, 'reconnect requested'); } catch {}
   }
-  connectBridge();
+  setTimeout(connectBridge, 0);
   notifyPopup();
 }
 
@@ -111,8 +120,20 @@ connectBridge();
 
 chrome.runtime.onInstalled.addListener(() => connectBridge());
 chrome.runtime.onStartup.addListener(() => connectBridge());
+chrome.storage.local.get('bridgeToken').then(({ bridgeToken: savedToken = '' }) => {
+  bridgeToken = savedToken;
+  tokenLoaded = true;
+  connectBridge();
+}).catch((error) => {
+  bridgeError = safeError(error);
+  notifyPopup();
+});
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'local' && changes.bridgeToken) {
+    bridgeToken = changes.bridgeToken.newValue || '';
+    tokenLoaded = true;
+    tokenMismatch = false;
+    authRejected = false;
     reconnectBridge();
   }
 });
@@ -147,7 +168,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 chrome.runtime.onMessage.addListener((message, _sender, respond) => {
   if (!message || typeof message.type !== 'string') return;
   if (message.type === 'ui.status') {
-    respond({ bridgeConnected: socket?.readyState === WebSocket.OPEN, authenticated, bridgeError, attached: attachedTab });
+    respond({ bridgeConnected: socket?.readyState === WebSocket.OPEN, authenticated, bridgeError, attached: attachedTab, workerBuild: WORKER_BUILD });
     return;
   }
   if (message.type === 'ui.attachActive') {

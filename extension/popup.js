@@ -14,6 +14,7 @@ async function refresh() {
     ? `Attached: ${state.attached.url || '(URL unavailable)'}`
     : 'No tab attached';
   attachButton.disabled = !state.bridgeConnected || state.attached !== null;
+  reconnectButton.textContent = state.bridgeError === 'token mismatch' ? 'Retry token authentication' : 'Reconnect bridge';
   detachButton.disabled = state.attached === null;
 }
 
