@@ -46,6 +46,7 @@ async function createWorker(initialToken, { deferStorage = false } = {}) {
   FakeWebSocket.instances = [];
   let savedToken = initialToken;
   let resolveInitialStorage;
+  let deferFirstRead = deferStorage;
   const pendingTimers = [];
   let heartbeat;
   const runtimeMessages = new EventHook();
@@ -59,12 +60,16 @@ async function createWorker(initialToken, { deferStorage = false } = {}) {
     },
     storage: {
       local: {
-        get: () => deferStorage
-          ? new Promise(resolve => {
-            const observedToken = savedToken;
-            resolveInitialStorage = () => resolve({ bridgeToken: observedToken });
-          })
-          : Promise.resolve({ bridgeToken: savedToken }),
+        get: () => {
+          if (deferFirstRead) {
+            deferFirstRead = false;
+            return new Promise(resolve => {
+              const observedToken = savedToken;
+              resolveInitialStorage = () => resolve({ bridgeToken: observedToken });
+            });
+          }
+          return Promise.resolve({ bridgeToken: savedToken });
+        },
       },
       onChanged: storageChanges,
     },
@@ -184,5 +189,22 @@ test('does not overwrite token change with a stale startup storage read', async 
   const socket = worker.sockets[0];
   await authenticate(socket, true);
   assert.equal(socket.sent[0].token, newToken);
+  assert.equal(worker.sendRuntimeMessage({ type: 'ui.status' }).authenticated, true);
+});
+
+test('manual reconnect reloads storage even when token was already saved', async () => {
+  const oldToken = '1'.repeat(32);
+  const currentToken = '2'.repeat(32);
+  const worker = await createWorker(oldToken);
+  const first = worker.sockets[0];
+  await authenticate(first, true);
+
+  // Simulate a token already saved in storage with no onChanged event.
+  worker.setSavedToken(currentToken);
+  assert.equal(worker.sendRuntimeMessage({ type: 'bridge.reconnect' }).ok, true);
+  const second = worker.sockets[1];
+  await authenticate(second, true);
+
+  assert.equal(second.sent[0].token, currentToken);
   assert.equal(worker.sendRuntimeMessage({ type: 'ui.status' }).authenticated, true);
 });
