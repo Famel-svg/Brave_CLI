@@ -3,6 +3,8 @@ import { normalizeBridgeToken, tokensMatchByFingerprint } from './token.mjs';
 const input = document.querySelector('#token');
 const status = document.querySelector('#status');
 const tokenFile = document.querySelector('#token-file');
+const diagnosticSummary = document.querySelector('#diagnostic-summary');
+const diagnosticsOutput = document.querySelector('#diagnostics');
 const saved = await chrome.storage.local.get('bridgeToken');
 input.value = saved.bridgeToken || '';
 
@@ -23,8 +25,26 @@ async function refreshBridgeStatus() {
   }
 }
 
+async function refreshDiagnostics() {
+  try {
+    const [state, log] = await Promise.all([
+      chrome.runtime.sendMessage({ type: 'ui.status' }),
+      chrome.runtime.sendMessage({ type: 'ui.diagnostics' })
+    ]);
+    const entries = Array.isArray(log?.entries) ? log.entries : [];
+    diagnosticSummary.textContent = `Worker ${state?.workerBuild || 'unknown'} | token loaded: ${Boolean(state?.tokenLoaded)} | storage revision: ${state?.storageRevision ?? 'unknown'} | mismatch: ${Boolean(state?.tokenMismatch)} | auth rejected: ${Boolean(state?.authRejected)} | events: ${entries.length}`;
+    diagnosticsOutput.textContent = JSON.stringify(entries, null, 2);
+  } catch (error) {
+    diagnosticSummary.textContent = `Could not read local diagnostics: ${String(error?.message || error)}`;
+    diagnosticsOutput.textContent = '';
+  }
+}
+
 chrome.runtime.onMessage.addListener((message) => {
-  if (message?.type === 'ui.changed') void refreshBridgeStatus();
+  if (message?.type === 'ui.changed') {
+    void refreshBridgeStatus();
+    void refreshDiagnostics();
+  }
 });
 
 async function saveToken(value) {
@@ -117,3 +137,19 @@ document.querySelector('#compare').addEventListener('click', async () => {
 });
 
 void refreshBridgeStatus();
+void refreshDiagnostics();
+document.querySelector('#refresh-diagnostics').addEventListener('click', () => void refreshDiagnostics());
+document.querySelector('#export-diagnostics').addEventListener('click', async () => {
+  await refreshDiagnostics();
+  const blob = new Blob([diagnosticsOutput.textContent || '[]'], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `brave-bridge-diagnostics-${new Date().toISOString().replaceAll(':', '-')}.json`;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+});
+document.querySelector('#clear-diagnostics').addEventListener('click', async () => {
+  await chrome.runtime.sendMessage({ type: 'ui.clearDiagnostics' });
+  await refreshDiagnostics();
+});

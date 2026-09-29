@@ -11,7 +11,35 @@ let authRejected = false;
 let tokenMismatch = false;
 let tokenLoaded = false;
 let storageRevision = 0;
-const WORKER_BUILD = '0.1.3';
+const WORKER_BUILD = '0.1.4';
+const DIAGNOSTIC_KEY = 'bridgeDiagnostics';
+const DIAGNOSTIC_LIMIT = 200;
+let diagnosticSequence = 0;
+let diagnosticWrite = Promise.resolve();
+
+function tokenMetadata(token) {
+  return {
+    present: typeof token === 'string' && token.length > 0,
+    length: typeof token === 'string' ? token.length : 0,
+    hexadecimal: typeof token === 'string' && /^[0-9a-f]+$/i.test(token)
+  };
+}
+
+function recordDiagnostic(event, details = {}) {
+  const entry = {
+    at: new Date().toISOString(),
+    sequence: ++diagnosticSequence,
+    build: WORKER_BUILD,
+    event,
+    ...details
+  };
+  diagnosticWrite = diagnosticWrite.then(async () => {
+    const stored = await chrome.storage.local.get(DIAGNOSTIC_KEY);
+    const entries = Array.isArray(stored[DIAGNOSTIC_KEY]) ? stored[DIAGNOSTIC_KEY] : [];
+    entries.push(entry);
+    await chrome.storage.local.set({ [DIAGNOSTIC_KEY]: entries.slice(-DIAGNOSTIC_LIMIT) });
+  }).catch(() => {});
+}
 
 const notifyPopup = () => chrome.runtime.sendMessage({ type: 'ui.changed' }).catch(() => {});
 const safeError = (e) => String(e?.message || e).slice(0, 500);
@@ -25,10 +53,11 @@ function send(payload) {
 }
 
 async function connectBridge() {
-  if (!tokenLoaded) return;
-  if (authRejected) return;
-  if (tokenMismatch) return;
+  if (!tokenLoaded) { recordDiagnostic('connect_skipped', { reason: 'token_not_loaded' }); return; }
+  if (authRejected) { recordDiagnostic('connect_skipped', { reason: 'authentication_rejected' }); return; }
+  if (tokenMismatch) { recordDiagnostic('connect_skipped', { reason: 'token_mismatch' }); return; }
   if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return;
+  recordDiagnostic('connect_start', { endpoint: 'ws://127.0.0.1:9229' });
   const ws = new WebSocket(WS_URL);
   socket = ws;
   authenticated = false;
@@ -38,11 +67,16 @@ async function connectBridge() {
     try {
       const revision = storageRevision;
       const { bridgeToken = '' } = await chrome.storage.local.get('bridgeToken');
-      if (revision !== storageRevision || socket !== ws) return;
+      if (revision !== storageRevision || socket !== ws) {
+        recordDiagnostic('hello_suppressed', { reason: 'storage_changed_during_read', readRevision: revision, currentRevision: storageRevision });
+        return;
+      }
+      recordDiagnostic('hello_sent', { protocol: 1, storageRevision: revision, token: tokenMetadata(bridgeToken) });
       ws.send(JSON.stringify({ type: 'hello', protocol: 1, token: bridgeToken }));
       notifyPopup();
     } catch (e) {
       bridgeError = safeError(e);
+      recordDiagnostic('hello_failed_locally', { error: bridgeError });
       ws.close();
     }
   });
@@ -59,6 +93,7 @@ async function connectBridge() {
       authRejected = false;
       tokenMismatch = false;
       bridgeError = '';
+      recordDiagnostic('authentication_accepted');
       notifyPopup();
       return;
     }
@@ -67,6 +102,7 @@ async function connectBridge() {
       bridgeError = String(message.error || 'Authentication rejected').slice(0, 300);
       tokenMismatch = bridgeError === 'token mismatch';
       authRejected = !tokenMismatch;
+      recordDiagnostic('authentication_rejected', { reason: bridgeError, retryBlocked: authRejected || tokenMismatch });
       notifyPopup();
       // Browser WebSocket API reserves 1008; use an application-defined code.
       ws.close(4008, bridgeError);
@@ -82,12 +118,14 @@ async function connectBridge() {
   ws.addEventListener('error', () => {
     if (socket !== ws) return;
     bridgeError = 'Cannot reach ws://127.0.0.1:9229';
+    recordDiagnostic('websocket_error', { endpoint: 'ws://127.0.0.1:9229', readyState: ws.readyState });
     notifyPopup();
   });
-  ws.addEventListener('close', () => {
+  ws.addEventListener('close', (event) => {
     if (socket !== ws) return;
     socket = null;
     authenticated = false;
+    recordDiagnostic('websocket_closed', { code: event.code, reason: String(event.reason || '').slice(0, 120), wasClean: event.wasClean });
     notifyPopup();
     if (authRejected || tokenMismatch) return;
     const wait = reconnectDelay;
@@ -120,8 +158,9 @@ connectBridge();
 chrome.runtime.onInstalled.addListener(() => connectBridge());
 chrome.runtime.onStartup.addListener(() => connectBridge());
 const startupStorageRevision = storageRevision;
-chrome.storage.local.get('bridgeToken').then(() => {
+chrome.storage.local.get('bridgeToken').then(({ bridgeToken = '' }) => {
   tokenLoaded = true;
+  recordDiagnostic('worker_started', { token: tokenMetadata(bridgeToken) });
   connectBridge();
 }).catch((error) => {
   if (storageRevision !== startupStorageRevision) return;
@@ -134,6 +173,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
     tokenLoaded = true;
     tokenMismatch = false;
     authRejected = false;
+    recordDiagnostic('token_storage_changed', { storageRevision, token: tokenMetadata(changes.bridgeToken.newValue || '') });
     reconnectBridge();
   }
 });
@@ -165,11 +205,30 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   }
 });
 
-chrome.runtime.onMessage.addListener((message, _sender, respond) => {
+chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (!message || typeof message.type !== 'string') return;
   if (message.type === 'ui.status') {
-    respond({ bridgeConnected: socket?.readyState === WebSocket.OPEN, authenticated, bridgeError, attached: attachedTab, workerBuild: WORKER_BUILD });
+    respond({ bridgeConnected: socket?.readyState === WebSocket.OPEN, authenticated, bridgeError, attached: attachedTab, workerBuild: WORKER_BUILD, tokenLoaded, storageRevision, tokenMismatch, authRejected });
     return;
+  }
+  if (message.type === 'ui.diagnostics') {
+    if (sender.id !== chrome.runtime.id || !sender.url?.endsWith('/options.html')) {
+      respond({ error: 'Diagnostics are available only in extension settings.' });
+      return;
+    }
+    chrome.storage.local.get(DIAGNOSTIC_KEY).then((stored) => respond({ entries: stored[DIAGNOSTIC_KEY] || [] })).catch((error) => respond({ error: safeError(error) }));
+    return true;
+  }
+  if (message.type === 'ui.clearDiagnostics') {
+    if (sender.id !== chrome.runtime.id || !sender.url?.endsWith('/options.html')) {
+      respond({ error: 'Diagnostics are available only in extension settings.' });
+      return;
+    }
+    chrome.storage.local.remove(DIAGNOSTIC_KEY).then(() => {
+      recordDiagnostic('diagnostics_cleared');
+      respond({ ok: true });
+    }).catch((error) => respond({ error: safeError(error) }));
+    return true;
   }
   if (message.type === 'ui.attachActive') {
     attachActiveTab().then(() => respond({ ok: true })).catch((e) => respond({ error: safeError(e) }));

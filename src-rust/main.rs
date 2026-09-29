@@ -576,6 +576,30 @@ fn read_bridge_token() -> Result<String> {
     load_or_create_bridge_token()
 }
 
+fn append_bridge_log(event: &str, details: &str) {
+    let Ok(path) = bridge_token_path().map(|path| path.with_file_name("bridge.log")) else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if std::fs::metadata(&path).map(|metadata| metadata.len() > 1_000_000).unwrap_or(false) {
+        let backup = path.with_extension("log.1");
+        let _ = std::fs::remove_file(&backup);
+        let _ = std::fs::rename(&path, backup);
+    }
+    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        use std::io::Write;
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_secs())
+            .unwrap_or_default();
+        let safe_event: String = event.chars().filter(|character| character.is_ascii_alphanumeric() || *character == '_' || *character == '-').take(48).collect();
+        let safe_details: String = details.chars().filter(|character| !character.is_control()).take(500).collect();
+        let _ = writeln!(file, "{timestamp} event={safe_event} {safe_details}");
+    }
+}
+
 fn validate_bridge_hello(
     text: &str,
     expected_token: &str,
@@ -600,11 +624,28 @@ async fn serve_extension_bridge(
     extension_id: String,
     connection: watch::Sender<Option<mpsc::Sender<BridgeCommand>>>,
 ) -> Result<()> {
+    let expected_from_environment = std::env::var("BRAVE_CLI_BRIDGE_TOKEN").is_ok();
+    let token_file = bridge_token_path()
+        .ok()
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .map(|value| value.trim().to_owned());
+    let expected_matches_file = token_file.as_deref() == Some(token.as_str());
+    append_bridge_log(
+        "bridge_started",
+        &format!(
+            "listen=127.0.0.1:9229 expected_source={} expected_token_chars={} expected_token_is_hex={} expected_matches_file={expected_matches_file}",
+            if expected_from_environment { "environment" } else { "file" },
+            token.len(),
+            !token.is_empty() && token.bytes().all(|byte| byte.is_ascii_hexdigit())
+        ),
+    );
     loop {
         let (stream, peer) = listener.accept().await?;
         if !peer.ip().is_loopback() {
+            append_bridge_log("connection_rejected", "reason=non_loopback_peer");
             continue;
         }
+        append_bridge_log("connection_accepted", &format!("peer={} origin_check=expected_extension", peer.ip()));
         let expected_origin = format!("chrome-extension://{extension_id}");
         let handshake = async_tungstenite::tokio::accept_hdr_async(
             stream,
@@ -627,14 +668,20 @@ async fn serve_extension_bridge(
         )
         .await;
         let Ok(mut socket) = handshake else {
+            append_bridge_log("websocket_handshake_rejected", "reason=origin_mismatch_or_invalid_handshake");
             continue;
         };
         let hello = tokio::time::timeout(Duration::from_secs(5), socket.next()).await;
-        let rejection_reason = match hello {
-            Ok(Some(Ok(Message::Text(text)))) => validate_bridge_hello(&text, &token).err(),
+        let rejection_reason = match &hello {
+            Ok(Some(Ok(Message::Text(text)))) => validate_bridge_hello(text, &token).err(),
             _ => Some("missing or invalid hello frame"),
         };
         if let Some(reason) = rejection_reason {
+            let received_metadata = match &hello {
+                Ok(Some(Ok(Message::Text(text)))) => serde_json::from_str::<serde_json::Value>(text).ok().and_then(|value| value.get("token").and_then(|token| token.as_str()).map(|received| format!("received_token_chars={} received_token_is_hex={} received_matches_file={}", received.len(), !received.is_empty() && received.bytes().all(|byte| byte.is_ascii_hexdigit()), token_file.as_deref() == Some(received)))).unwrap_or_else(|| "received_token=missing_or_invalid".to_owned()),
+                _ => "received_token=unavailable".to_owned(),
+            };
+            append_bridge_log("authentication_rejected", &format!("reason={reason} {received_metadata}"));
             let rejection = serde_json::json!({"type":"hello","ok":false,"error":reason});
             let _ = socket
                 .send(Message::Text(rejection.to_string().into()))
@@ -642,6 +689,7 @@ async fn serve_extension_bridge(
             let _ = socket.close(None).await;
             continue;
         }
+        append_bridge_log("authentication_accepted", "protocol=1 token_matches=true");
         let acceptance = serde_json::json!({"type":"hello","ok":true});
         socket
             .send(Message::Text(acceptance.to_string().into()))

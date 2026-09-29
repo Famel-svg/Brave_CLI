@@ -5,3 +5,4 @@ input { min-height: 36px; padding: 4px 8px; }
 button { width: max-content; min-height: 36px; padding: 4px 14px; }
 .warning { border-left: 4px solid #c80; padding: 8px 12px; }
 output { min-height: 1em; }
+pre { max-height: 420px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; padding: 12px; background: color-mix(in srgb, CanvasText 8%, Canvas); border-radius: 8px; }

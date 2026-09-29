@@ -90,6 +90,12 @@ URL rules: only public `http:` and `https:`; reject username/password, `javascri
 
 ## Limits
 
+## Connection diagnostics
+
+Open **Extension settings** and use **Refresh diagnostics** or **Export sanitized log**. The extension keeps the newest 200 events in local storage: worker build, connection transitions, retry decisions, storage revision, and token metadata (present, character count, hexadecimal format). It never records token or hash. **Clear diagnostics** removes this log.
+
+Rust bridge writes connection/auth events to `%LOCALAPPDATA%\\brave-cli-control\\bridge.log` on Windows (or beside `bridge.token` in the per-user config directory elsewhere). It rotates at 1 MB to `bridge.log.1`. Log includes loopback peer, Origin handshake outcome, hello result, failure category, and received token length/hex format on rejected auth. No token value or browser page content enters log. Check logs for private paths before sharing.
+
 - Brave compatibility not runtime-verified here; install and test on the target Brave build.
 - `chrome.debugger` protocol access is broad and may show browser-controlled debugger UI or detach when DevTools/another debugger takes over.
 - Inspection is DOM/AX semantic data, not pixels. Canvas drawing, video frames, browser chrome, occlusion, and some cross-origin/out-of-process frame content may be missing.
