@@ -15,7 +15,7 @@ let activeTokenSource = 'none';
 let nativeHostState = 'starting';
 let nativeRecoveryInProgress = false;
 let storageRevision = 0;
-const WORKER_BUILD = '0.1.8';
+const WORKER_BUILD = '0.1.9';
 const NATIVE_HOST = 'com.famel.brave_cli';
 const DIAGNOSTIC_KEY = 'bridgeDiagnostics';
 const DIAGNOSTIC_LIMIT = 200;
@@ -229,7 +229,6 @@ chrome.runtime.onInstalled.addListener(() => connectBridge());
 chrome.runtime.onStartup.addListener(() => connectBridge());
 const startupStorageRevision = storageRevision;
 async function initializeBridgeToken() {
-  const initialStorageRevision = storageRevision;
   try {
     await chrome.storage.local.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' });
   } catch (error) {
@@ -240,18 +239,19 @@ async function initializeBridgeToken() {
     if (!response?.ok || typeof response.token !== 'string' || !/^[0-9a-f]{32,4096}$/i.test(response.token)) {
       throw new Error(response?.error || 'Native host returned invalid token metadata');
     }
-    if (initialStorageRevision === storageRevision) {
-      activeBridgeToken = response.token;
-      activeTokenSource = 'native_messaging';
-    }
+    const nativeTokenChanged = activeBridgeToken !== response.token
+      || activeTokenSource !== 'native_messaging';
+    activeBridgeToken = response.token;
+    activeTokenSource = 'native_messaging';
     nativeHostState = 'connected';
     tokenLoaded = true;
     recordDiagnostic('native_token_loaded', { token: tokenMetadata(activeBridgeToken), tokenSource: activeTokenSource });
+    if (nativeTokenChanged) reconnectBridge();
   } catch (error) {
     nativeHostState = 'unavailable';
     const fallbackRevision = storageRevision;
     const { bridgeToken = '' } = await chrome.storage.local.get('bridgeToken').catch(() => ({}));
-    if (initialStorageRevision === fallbackRevision && fallbackRevision === storageRevision) {
+    if (fallbackRevision === storageRevision && activeTokenSource !== 'native_messaging') {
       activeBridgeToken = bridgeToken;
       activeTokenSource = 'extension_storage';
     }

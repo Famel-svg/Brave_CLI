@@ -18,6 +18,7 @@ async function loadOptionsPage(nativeMessagingResult, savedToken = 'a'.repeat(32
     ...stateOverrides,
   };
   let reloadCount = 0;
+  let storageWriteCount = 0;
   const chrome = {
     runtime: {
       onMessage: { addListener() {} },
@@ -32,7 +33,10 @@ async function loadOptionsPage(nativeMessagingResult, savedToken = 'a'.repeat(32
       },
       reload: () => { reloadCount += 1; },
     },
-    storage: { local: { get: async () => ({ bridgeToken: savedToken }), set: async () => undefined } },
+    storage: { local: {
+      get: async () => ({ bridgeToken: savedToken }),
+      set: async () => { storageWriteCount += 1; },
+    } },
   };
   const document = {
     querySelector(selector) {
@@ -72,7 +76,11 @@ async function loadOptionsPage(nativeMessagingResult, savedToken = 'a'.repeat(32
   });
   await new Promise(resolve => setImmediate(resolve));
   await new Promise(resolve => setImmediate(resolve));
-  return { elements, timers, document, documentListeners, windowListeners, get reloadCount() { return reloadCount; } };
+  return {
+    elements, timers, document, documentListeners, windowListeners,
+    get reloadCount() { return reloadCount; },
+    get storageWriteCount() { return storageWriteCount; },
+  };
 }
 
 test('settings page probes native host then schedules extension worker reload', async () => {
@@ -99,6 +107,21 @@ test('settings page retries native host when connected state still uses stale st
   );
   assert.match(state.elements.get('#status').textContent, /Restarting extension worker/);
   assert.ok(state.timers.some(timer => timer.delay === 250));
+});
+
+test('settings page blocks manual token save while native host is starting', async () => {
+  const state = await loadOptionsPage(
+    { ok: true, token: 'b'.repeat(32) },
+    'a'.repeat(32),
+    { nativeHostState: 'starting', tokenMismatch: false },
+  );
+  const input = state.elements.get('#token');
+  input.value = 'c'.repeat(32);
+  state.elements.get('#save').click();
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.match(state.elements.get('#status').textContent, /Native host is loading its token/);
+  assert.equal(state.storageWriteCount, 0);
 });
 
 test('saved token reveal hides automatically after ten seconds', async () => {

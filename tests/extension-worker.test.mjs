@@ -42,7 +42,7 @@ class FakeWebSocket {
   }
 }
 
-async function createWorker(initialToken, { deferStorage = false, nativeToken = null } = {}) {
+async function createWorker(initialToken, { deferStorage = false, nativeToken = null, deferNativeStartup = false } = {}) {
   FakeWebSocket.instances = [];
   let savedToken = initialToken;
   let resolveInitialStorage;
@@ -50,6 +50,7 @@ async function createWorker(initialToken, { deferStorage = false, nativeToken = 
   let nativeMessagingCalls = 0;
   let deferNextNativeResponse = false;
   let resolveDeferredNativeResponse;
+  let resolveInitialNativeResponse;
   const pendingTimers = [];
   let heartbeat;
   const runtimeMessages = new EventHook();
@@ -65,6 +66,11 @@ async function createWorker(initialToken, { deferStorage = false, nativeToken = 
         assert.equal(host, 'com.famel.brave_cli');
         assert.equal(message.type, 'get_bridge_token');
         if (!nativeToken) throw new Error('native host unavailable');
+        if (deferNativeStartup && nativeMessagingCalls === 1) {
+          return await new Promise(resolve => {
+            resolveInitialNativeResponse = () => resolve({ ok: true, token: nativeToken });
+          });
+        }
         if (deferNextNativeResponse) {
           deferNextNativeResponse = false;
           return await new Promise(resolve => { resolveDeferredNativeResponse = () => resolve({ ok: true, token: nativeToken }); });
@@ -103,7 +109,7 @@ async function createWorker(initialToken, { deferStorage = false, nativeToken = 
   }, { filename: 'service-worker.js' });
 
   for (let attempt = 0; attempt < 8; attempt += 1) {
-    if (FakeWebSocket.instances.length > 0 || (deferStorage && resolveInitialStorage)) break;
+    if (FakeWebSocket.instances.length > 0 || (deferStorage && resolveInitialStorage) || (deferNativeStartup && resolveInitialNativeResponse)) break;
     await new Promise(resolve => setImmediate(resolve));
   }
 
@@ -112,6 +118,11 @@ async function createWorker(initialToken, { deferStorage = false, nativeToken = 
     loadInitialStorage() {
       assert.ok(resolveInitialStorage, 'expected storage read to be pending');
       resolveInitialStorage({ bridgeToken: savedToken });
+    },
+    releaseNativeStartup() {
+      assert.ok(resolveInitialNativeResponse, 'expected startup Native Messaging response to be pending');
+      resolveInitialNativeResponse();
+      resolveInitialNativeResponse = null;
     },
     setSavedToken(value) { savedToken = value; },
     setNativeToken(value) { nativeToken = value; },
@@ -213,6 +224,31 @@ test('uses native host token instead of stale extension storage', async () => {
   await authenticate(socket, true);
   assert.equal(socket.sent[0].token, bridgeToken);
   assert.notEqual(socket.sent[0].token, staleToken);
+  assert.equal(worker.sendRuntimeMessage({ type: 'ui.status' }).authenticated, true);
+});
+
+test('native startup token overrides storage change made while host response is pending', async () => {
+  const staleToken = 'a'.repeat(32);
+  const bridgeToken = 'b'.repeat(32);
+  const interveningToken = 'c'.repeat(32);
+  const worker = await createWorker(staleToken, {
+    nativeToken: bridgeToken,
+    deferNativeStartup: true,
+  });
+  assert.equal(worker.sockets.length, 0);
+
+  worker.setSavedToken(interveningToken);
+  worker.emitStorageChange({ bridgeToken: { newValue: interveningToken } });
+  assert.equal(worker.sockets.length, 1, 'storage event may start a provisional connection');
+
+  worker.releaseNativeStartup();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(worker.sockets.length, 2, 'native token arrival must replace provisional connection');
+  assert.equal(worker.sendRuntimeMessage({ type: 'ui.status' }).tokenSource, 'native_messaging');
+
+  const socket = worker.sockets[1];
+  await authenticate(socket, true);
+  assert.equal(socket.sent[0].token, bridgeToken);
   assert.equal(worker.sendRuntimeMessage({ type: 'ui.status' }).authenticated, true);
 });
 

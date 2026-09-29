@@ -45,9 +45,9 @@ document.addEventListener('keydown', event => {
 document.addEventListener('pagehide', hideToken);
 window.addEventListener('blur', hideToken);
 
-async function nativeTokenIsAuthoritative() {
+async function nativeHostStatus() {
   const state = await chrome.runtime.sendMessage({ type: 'ui.status' }).catch(() => null);
-  return state?.nativeHostState === 'connected';
+  return state?.nativeHostState || 'unknown';
 }
 
 async function refreshBridgeStatus() {
@@ -114,8 +114,13 @@ chrome.runtime.onMessage.addListener((message) => {
 });
 
 async function saveToken(value) {
-  if (await nativeTokenIsAuthoritative()) {
+  const nativeState = await nativeHostStatus();
+  if (nativeState === 'connected') {
     status.textContent = 'Native host supplies the bridge token. Manual token changes are disabled.';
+    return;
+  }
+  if (nativeState === 'starting') {
+    status.textContent = 'Native host is loading its token. Wait for bridge status before changing the token.';
     return;
   }
   let token;
