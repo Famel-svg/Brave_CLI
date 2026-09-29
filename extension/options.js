@@ -8,6 +8,11 @@ const diagnosticsOutput = document.querySelector('#diagnostics');
 const saved = await chrome.storage.local.get('bridgeToken');
 input.value = saved.bridgeToken || '';
 
+async function nativeTokenIsAuthoritative() {
+  const state = await chrome.runtime.sendMessage({ type: 'ui.status' }).catch(() => null);
+  return state?.nativeHostState === 'connected';
+}
+
 async function refreshBridgeStatus() {
   try {
     const state = await chrome.runtime.sendMessage({ type: 'ui.status' });
@@ -32,7 +37,7 @@ async function refreshDiagnostics() {
       chrome.runtime.sendMessage({ type: 'ui.diagnostics' })
     ]);
     const entries = Array.isArray(log?.entries) ? log.entries : [];
-    diagnosticSummary.textContent = `Worker ${state?.workerBuild || 'unknown'} | token loaded: ${Boolean(state?.tokenLoaded)} | storage revision: ${state?.storageRevision ?? 'unknown'} | mismatch: ${Boolean(state?.tokenMismatch)} | auth rejected: ${Boolean(state?.authRejected)} | events: ${entries.length}`;
+    diagnosticSummary.textContent = `Worker ${state?.workerBuild || 'unknown'} | native host: ${state?.nativeHostState || 'unknown'} | token source: ${state?.tokenSource || 'unknown'} | token loaded: ${Boolean(state?.tokenLoaded)} | storage revision: ${state?.storageRevision ?? 'unknown'} | mismatch: ${Boolean(state?.tokenMismatch)} | auth rejected: ${Boolean(state?.authRejected)} | events: ${entries.length}`;
     diagnosticsOutput.textContent = JSON.stringify(entries, null, 2);
   } catch (error) {
     diagnosticSummary.textContent = `Could not read local diagnostics: ${String(error?.message || error)}`;
@@ -48,6 +53,10 @@ chrome.runtime.onMessage.addListener((message) => {
 });
 
 async function saveToken(value) {
+  if (await nativeTokenIsAuthoritative()) {
+    status.textContent = 'Native host supplies the bridge token. Manual token changes are disabled.';
+    return;
+  }
   let token;
   try {
     token = normalizeBridgeToken(value);

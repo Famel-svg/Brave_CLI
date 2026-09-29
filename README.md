@@ -8,10 +8,9 @@ The recommended AI connection is the Manifest V3 extension in `extension/`. It r
 
 ```powershell
 cargo install --path .
-brave-cli bridge-token
 ```
 
-Load `extension/` unpacked from `brave://extensions`, copy its displayed ID, then add this MCP server to Codex configuration and restart Codex:
+Load `extension/` unpacked from `brave://extensions`, copy its displayed ID, install the host with `brave-cli native-host-install --extension-id <id>`, then add this MCP server to Codex configuration and restart Codex:
 
 ```json
 {
@@ -24,7 +23,7 @@ Load `extension/` unpacked from `brave://extensions`, copy its displayed ID, the
 }
 ```
 
-Paste the local pairing token into the extension's Settings page. Keep it private. Select a Brave tab and click **Attach to current tab**; call **Detach** when done. The extension's `debugger` permission is powerful and applies to attached tabs. The bridge binds only to loopback, pins the extension ID, requires the token, and rejects local/private IP URLs. It cannot inspect browser chrome or all rendered pixels.
+Native Messaging supplies the bridge's current local token to the exact allowed extension ID, eliminating manual token copying and stale-token mismatches. The extension's `debugger` permission is powerful and applies to attached tabs. The WebSocket bridge binds only to loopback, pins the extension ID, requires the token, and rejects local/private IP URLs. It cannot inspect browser chrome or all rendered pixels. Remove the per-user host registration with `brave-cli native-host-uninstall`.
 
 See [extension setup and protocol](extension/README.md) and [browser connection research](docs/browser-connection-research.md).
 

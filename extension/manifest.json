@@ -1,10 +1,10 @@
 {
   "manifest_version": 3,
   "name": "Brave Browser Bridge",
-  "version": "0.1.4",
+  "version": "0.1.6",
   "description": "Explicit, local bridge for AI-assisted inspection of the selected Brave tab.",
   "minimum_chrome_version": "116",
-  "permissions": ["debugger", "storage", "activeTab"],
+  "permissions": ["debugger", "storage", "activeTab", "nativeMessaging"],
   "host_permissions": ["http://127.0.0.1:9229/*"],
   "background": { "service_worker": "service-worker.js", "type": "module" },
   "action": { "default_popup": "popup.html", "default_title": "Brave Browser Bridge" },

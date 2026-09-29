@@ -42,7 +42,7 @@ class FakeWebSocket {
   }
 }
 
-async function createWorker(initialToken, { deferStorage = false } = {}) {
+async function createWorker(initialToken, { deferStorage = false, nativeToken = null } = {}) {
   FakeWebSocket.instances = [];
   let savedToken = initialToken;
   let resolveInitialStorage;
@@ -57,11 +57,20 @@ async function createWorker(initialToken, { deferStorage = false } = {}) {
       onInstalled: new EventHook(),
       onStartup: new EventHook(),
       sendMessage: async () => undefined,
+      sendNativeMessage: async (host, message) => {
+        assert.equal(host, 'com.famel.brave_cli');
+        assert.equal(message.type, 'get_bridge_token');
+        if (!nativeToken) throw new Error('native host unavailable');
+        return { ok: true, token: nativeToken };
+      },
     },
     storage: {
       local: {
-        get: () => {
-          if (deferFirstRead) {
+        setAccessLevel: async () => undefined,
+        set: async () => undefined,
+        get: key => {
+          if (key === 'bridgeDiagnostics') return Promise.resolve({ bridgeDiagnostics: [] });
+          if (key === 'bridgeToken' && deferFirstRead) {
             deferFirstRead = false;
             return new Promise(resolve => {
               const observedToken = savedToken;
@@ -85,7 +94,10 @@ async function createWorker(initialToken, { deferStorage = false } = {}) {
     setTimeout: (callback, delay) => { pendingTimers.push({ callback, delay }); return pendingTimers.length; },
   }, { filename: 'service-worker.js' });
 
-  if (!deferStorage) await new Promise(resolve => setImmediate(resolve));
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    if (FakeWebSocket.instances.length > 0 || (deferStorage && resolveInitialStorage)) break;
+    await new Promise(resolve => setImmediate(resolve));
+  }
 
   return {
     get sockets() { return FakeWebSocket.instances; },
@@ -128,6 +140,7 @@ test('retries after rejected handshake when reconnect is requested', async () =>
   worker.heartbeat();
   assert.equal(worker.sockets.length, 1, 'heartbeat must not retry rejected credentials');
   assert.equal(worker.sendRuntimeMessage({ type: 'bridge.reconnect' }).ok, true);
+  await new Promise(resolve => setImmediate(resolve));
   assert.equal(worker.sockets.length, 2);
 
   const second = worker.sockets[1];
@@ -174,6 +187,19 @@ test('waits for extension storage before opening bridge socket', async () => {
   assert.equal(worker.sendRuntimeMessage({ type: 'ui.status' }).authenticated, true);
 });
 
+test('uses native host token instead of stale extension storage', async () => {
+  const staleToken = 'a'.repeat(32);
+  const bridgeToken = 'b'.repeat(32);
+  const worker = await createWorker(staleToken, { nativeToken: bridgeToken });
+  assert.equal(worker.sockets.length, 1);
+
+  const socket = worker.sockets[0];
+  await authenticate(socket, true);
+  assert.equal(socket.sent[0].token, bridgeToken);
+  assert.notEqual(socket.sent[0].token, staleToken);
+  assert.equal(worker.sendRuntimeMessage({ type: 'ui.status' }).authenticated, true);
+});
+
 test('does not overwrite token change with a stale startup storage read', async () => {
   const oldToken = 'e'.repeat(32);
   const newToken = 'f'.repeat(32);
@@ -202,6 +228,7 @@ test('manual reconnect reloads storage even when token was already saved', async
   // Simulate a token already saved in storage with no onChanged event.
   worker.setSavedToken(currentToken);
   assert.equal(worker.sendRuntimeMessage({ type: 'bridge.reconnect' }).ok, true);
+  await new Promise(resolve => setImmediate(resolve));
   const second = worker.sockets[1];
   await authenticate(second, true);
 

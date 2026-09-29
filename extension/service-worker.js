@@ -10,8 +10,12 @@ let bridgeError = '';
 let authRejected = false;
 let tokenMismatch = false;
 let tokenLoaded = false;
+let activeBridgeToken = '';
+let activeTokenSource = 'none';
+let nativeHostState = 'starting';
 let storageRevision = 0;
-const WORKER_BUILD = '0.1.4';
+const WORKER_BUILD = '0.1.6';
+const NATIVE_HOST = 'com.famel.brave_cli';
 const DIAGNOSTIC_KEY = 'bridgeDiagnostics';
 const DIAGNOSTIC_LIMIT = 200;
 let diagnosticSequence = 0;
@@ -66,13 +70,12 @@ async function connectBridge() {
     reconnectDelay = 500;
     try {
       const revision = storageRevision;
-      const { bridgeToken = '' } = await chrome.storage.local.get('bridgeToken');
       if (revision !== storageRevision || socket !== ws) {
         recordDiagnostic('hello_suppressed', { reason: 'storage_changed_during_read', readRevision: revision, currentRevision: storageRevision });
         return;
       }
-      recordDiagnostic('hello_sent', { protocol: 1, storageRevision: revision, token: tokenMetadata(bridgeToken) });
-      ws.send(JSON.stringify({ type: 'hello', protocol: 1, token: bridgeToken }));
+      recordDiagnostic('hello_sent', { protocol: 1, storageRevision: revision, token: tokenMetadata(activeBridgeToken), tokenSource: activeTokenSource });
+      ws.send(JSON.stringify({ type: 'hello', protocol: 1, token: activeBridgeToken }));
       notifyPopup();
     } catch (e) {
       bridgeError = safeError(e);
@@ -134,7 +137,7 @@ async function connectBridge() {
   });
 }
 
-function reconnectBridge() {
+function reconnectBridge(reloadStoredToken = false) {
   authRejected = false;
   tokenMismatch = false;
   authenticated = false;
@@ -144,7 +147,20 @@ function reconnectBridge() {
   if (previous && previous.readyState !== WebSocket.CLOSED) {
     try { previous.close(1000, 'reconnect requested'); } catch {}
   }
-  connectBridge();
+  if (reloadStoredToken && nativeHostState !== 'connected') {
+    chrome.storage.local.get('bridgeToken').then(({ bridgeToken = '' }) => {
+      activeBridgeToken = bridgeToken;
+      activeTokenSource = 'extension_storage';
+      tokenLoaded = true;
+      connectBridge();
+    }).catch((error) => {
+      bridgeError = safeError(error);
+      recordDiagnostic('token_reload_failed', { error: bridgeError });
+      notifyPopup();
+    });
+  } else {
+    connectBridge();
+  }
   notifyPopup();
 }
 
@@ -158,18 +174,56 @@ connectBridge();
 chrome.runtime.onInstalled.addListener(() => connectBridge());
 chrome.runtime.onStartup.addListener(() => connectBridge());
 const startupStorageRevision = storageRevision;
-chrome.storage.local.get('bridgeToken').then(({ bridgeToken = '' }) => {
-  tokenLoaded = true;
-  recordDiagnostic('worker_started', { token: tokenMetadata(bridgeToken) });
+async function initializeBridgeToken() {
+  const initialStorageRevision = storageRevision;
+  try {
+    await chrome.storage.local.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' });
+  } catch (error) {
+    recordDiagnostic('storage_access_restriction_failed', { error: safeError(error) });
+  }
+  try {
+    const response = await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'get_bridge_token' });
+    if (!response?.ok || typeof response.token !== 'string' || !/^[0-9a-f]{32,4096}$/i.test(response.token)) {
+      throw new Error(response?.error || 'Native host returned invalid token metadata');
+    }
+    if (initialStorageRevision === storageRevision) {
+      activeBridgeToken = response.token;
+      activeTokenSource = 'native_messaging';
+    }
+    nativeHostState = 'connected';
+    tokenLoaded = true;
+    recordDiagnostic('native_token_loaded', { token: tokenMetadata(activeBridgeToken), tokenSource: activeTokenSource });
+  } catch (error) {
+    nativeHostState = 'unavailable';
+    const fallbackRevision = storageRevision;
+    const { bridgeToken = '' } = await chrome.storage.local.get('bridgeToken').catch(() => ({}));
+    if (initialStorageRevision === fallbackRevision && fallbackRevision === storageRevision) {
+      activeBridgeToken = bridgeToken;
+      activeTokenSource = 'extension_storage';
+    }
+    tokenLoaded = true;
+    recordDiagnostic('native_host_unavailable', { reason: safeError(error), fallbackToken: tokenMetadata(activeBridgeToken) });
+  }
+  recordDiagnostic('worker_started', { tokenSource: activeTokenSource, token: tokenMetadata(activeBridgeToken) });
   connectBridge();
-}).catch((error) => {
+}
+
+initializeBridgeToken().catch((error) => {
   if (storageRevision !== startupStorageRevision) return;
+  nativeHostState = 'failed';
   bridgeError = safeError(error);
+  recordDiagnostic('token_initialization_failed', { error: bridgeError });
   notifyPopup();
 });
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'local' && changes.bridgeToken) {
+    if (nativeHostState === 'connected') {
+      recordDiagnostic('ignored_storage_token_change_native_authoritative', { storageRevision });
+      return;
+    }
     storageRevision += 1;
+    activeBridgeToken = changes.bridgeToken.newValue || '';
+    activeTokenSource = 'extension_storage';
     tokenLoaded = true;
     tokenMismatch = false;
     authRejected = false;
@@ -208,7 +262,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (!message || typeof message.type !== 'string') return;
   if (message.type === 'ui.status') {
-    respond({ bridgeConnected: socket?.readyState === WebSocket.OPEN, authenticated, bridgeError, attached: attachedTab, workerBuild: WORKER_BUILD, tokenLoaded, storageRevision, tokenMismatch, authRejected });
+    respond({ bridgeConnected: socket?.readyState === WebSocket.OPEN, authenticated, bridgeError, attached: attachedTab, workerBuild: WORKER_BUILD, tokenLoaded, storageRevision, tokenMismatch, authRejected, nativeHostState, tokenSource: activeTokenSource });
     return;
   }
   if (message.type === 'ui.diagnostics') {
@@ -239,7 +293,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     return true;
   }
   if (message.type === 'bridge.reconnect') {
-    reconnectBridge();
+    reconnectBridge(true);
     respond({ ok: true });
     return;
   }

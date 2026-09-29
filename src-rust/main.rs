@@ -9,7 +9,11 @@ use clap::{Parser, Subcommand};
 use futures::StreamExt;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::{path::PathBuf, time::Duration};
+use std::{
+    io::{Read, Write},
+    path::PathBuf,
+    time::Duration,
+};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::TcpListener,
@@ -82,6 +86,11 @@ enum Command {
         command: PageCommand,
     },
     BridgeToken,
+    NativeHostInstall {
+        #[arg(long)]
+        extension_id: String,
+    },
+    NativeHostUninstall,
     Mcp {
         #[arg(long, default_value_t = 9229)]
         bridge_port: u16,
@@ -567,13 +576,173 @@ fn load_or_create_bridge_token() -> Result<String> {
 }
 
 fn read_bridge_token() -> Result<String> {
-    if let Ok(token) = std::env::var("BRAVE_CLI_BRIDGE_TOKEN") {
-        if token.len() >= 32 && token.bytes().all(|b| b.is_ascii_hexdigit()) {
-            return Ok(token);
-        }
-        bail!("BRAVE_CLI_BRIDGE_TOKEN must contain at least 32 hexadecimal characters");
-    }
+    // The persisted per-user token is the single source shared by the bridge
+    // and Native Messaging child process. Environment overrides caused them
+    // to authenticate against different values.
     load_or_create_bridge_token()
+}
+
+fn native_host_manifest_path() -> Result<PathBuf> {
+    Ok(bridge_token_path()?.with_file_name("native-host.json"))
+}
+
+fn native_host_executable_path() -> Result<PathBuf> {
+    Ok(bridge_token_path()?.with_file_name("brave-cli-native-host.exe"))
+}
+
+fn native_messaging_registry_key() -> &'static str {
+    r"HKCU\Software\Google\Chrome\NativeMessagingHosts\com.famel.brave_cli"
+}
+
+fn install_native_messaging_host(extension_id: &str) -> Result<()> {
+    if !cfg!(windows) {
+        bail!("automatic native messaging host installation currently supports Windows only");
+    }
+    if extension_id.len() != 32
+        || !extension_id
+            .bytes()
+            .all(|byte| (b'a'..=b'p').contains(&byte))
+    {
+        bail!("extension id must be exactly 32 lowercase characters from a through p");
+    }
+    let executable = native_host_executable_path()?;
+    let manifest = native_host_manifest_path()?;
+    let parent = executable
+        .parent()
+        .context("native host directory is unavailable")?;
+    std::fs::create_dir_all(parent)?;
+    std::fs::copy(std::env::current_exe()?, &executable)
+        .context("cannot install native messaging executable")?;
+    let contents = serde_json::json!({
+        "name": "com.famel.brave_cli",
+        "description": "Local token provider for Brave CLI browser bridge",
+        "path": executable,
+        "type": "stdio",
+        "allowed_origins": [format!("chrome-extension://{extension_id}/")]
+    });
+    std::fs::write(&manifest, serde_json::to_vec_pretty(&contents)?)
+        .context("cannot write native messaging manifest")?;
+    let status = std::process::Command::new("reg.exe")
+        .args([
+            "add",
+            native_messaging_registry_key(),
+            "/ve",
+            "/t",
+            "REG_SZ",
+            "/d",
+        ])
+        .arg(&manifest)
+        .args(["/f"])
+        .status()
+        .context("cannot register native messaging host in current-user registry")?;
+    if !status.success() {
+        bail!("Windows registry rejected native messaging host registration");
+    }
+    println!(
+        "Native messaging host installed for extension {extension_id}; manifest {}",
+        manifest.display()
+    );
+    Ok(())
+}
+
+fn uninstall_native_messaging_host() -> Result<()> {
+    if !cfg!(windows) {
+        bail!("automatic native messaging host removal currently supports Windows only");
+    }
+    let status = std::process::Command::new("reg.exe")
+        .args(["delete", native_messaging_registry_key(), "/f"])
+        .status()
+        .context("cannot remove native messaging host registry entry")?;
+    if !status.success() {
+        bail!("Windows registry could not remove native messaging host registration");
+    }
+    for path in [native_host_manifest_path()?, native_host_executable_path()?] {
+        if path.exists() {
+            std::fs::remove_file(path)?;
+        }
+    }
+    println!("Native messaging host removed.");
+    Ok(())
+}
+
+fn run_native_messaging_host() -> Result<()> {
+    #[cfg(windows)]
+    set_native_messaging_stdio_binary()?;
+    let caller_origin = std::env::args()
+        .skip(1)
+        .find(|arg| arg.starts_with("chrome-extension://"))
+        .unwrap_or_default();
+    let manifest: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(native_host_manifest_path()?)
+            .context("native messaging host manifest is missing")?,
+    )
+    .context("native messaging host manifest is invalid")?;
+    let origin_allowed = manifest["allowed_origins"]
+        .as_array()
+        .is_some_and(|origins| {
+            origins
+                .iter()
+                .any(|origin| origin.as_str() == Some(&caller_origin))
+        });
+    if !origin_allowed {
+        bail!("native messaging caller origin is not authorized");
+    }
+
+    let mut input = std::io::stdin().lock();
+    let mut first_byte = [0_u8; 1];
+    if input.read(&mut first_byte)? == 0 {
+        return Ok(());
+    }
+    let mut remaining_length = [0_u8; 3];
+    input.read_exact(&mut remaining_length)?;
+    let length = u32::from_le_bytes([
+        first_byte[0],
+        remaining_length[0],
+        remaining_length[1],
+        remaining_length[2],
+    ]) as usize;
+    if length == 0 || length > 64 * 1024 {
+        bail!("native messaging request size is invalid");
+    }
+    let mut request_bytes = vec![0_u8; length];
+    input.read_exact(&mut request_bytes)?;
+    let request: serde_json::Value = serde_json::from_slice(&request_bytes)
+        .context("native messaging request is invalid JSON")?;
+    let response = if request["type"] == "get_bridge_token" {
+        serde_json::json!({"ok":true,"token":read_bridge_token()?})
+    } else {
+        serde_json::json!({"ok":false,"error":"unsupported request"})
+    };
+    let response_bytes = serde_json::to_vec(&response)?;
+    if response_bytes.len() > 1024 * 1024 {
+        bail!("native messaging response exceeds browser limit");
+    }
+    let mut output = std::io::stdout().lock();
+    output.write_all(&(response_bytes.len() as u32).to_le_bytes())?;
+    output.write_all(&response_bytes)?;
+    output.flush()?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn set_native_messaging_stdio_binary() -> Result<()> {
+    use std::os::raw::c_int;
+    unsafe extern "C" {
+        fn _setmode(fd: c_int, mode: c_int) -> c_int;
+    }
+    const O_BINARY: c_int = 0x8000;
+    for fd in [0, 1] {
+        // SAFETY: stdin/stdout are valid CRT descriptors for a Native Host.
+        if unsafe { _setmode(fd, O_BINARY) } == -1 {
+            bail!("cannot switch Native Messaging stdio to binary mode");
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn set_native_messaging_stdio_binary() -> Result<()> {
+    Ok(())
 }
 
 fn append_bridge_log(event: &str, details: &str) {
@@ -583,19 +752,36 @@ fn append_bridge_log(event: &str, details: &str) {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    if std::fs::metadata(&path).map(|metadata| metadata.len() > 1_000_000).unwrap_or(false) {
+    if std::fs::metadata(&path)
+        .map(|metadata| metadata.len() > 1_000_000)
+        .unwrap_or(false)
+    {
         let backup = path.with_extension("log.1");
         let _ = std::fs::remove_file(&backup);
         let _ = std::fs::rename(&path, backup);
     }
-    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
         use std::io::Write;
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|duration| duration.as_secs())
             .unwrap_or_default();
-        let safe_event: String = event.chars().filter(|character| character.is_ascii_alphanumeric() || *character == '_' || *character == '-').take(48).collect();
-        let safe_details: String = details.chars().filter(|character| !character.is_control()).take(500).collect();
+        let safe_event: String = event
+            .chars()
+            .filter(|character| {
+                character.is_ascii_alphanumeric() || *character == '_' || *character == '-'
+            })
+            .take(48)
+            .collect();
+        let safe_details: String = details
+            .chars()
+            .filter(|character| !character.is_control())
+            .take(500)
+            .collect();
         let _ = writeln!(file, "{timestamp} event={safe_event} {safe_details}");
     }
 }
@@ -624,7 +810,6 @@ async fn serve_extension_bridge(
     extension_id: String,
     connection: watch::Sender<Option<mpsc::Sender<BridgeCommand>>>,
 ) -> Result<()> {
-    let expected_from_environment = std::env::var("BRAVE_CLI_BRIDGE_TOKEN").is_ok();
     let token_file = bridge_token_path()
         .ok()
         .and_then(|path| std::fs::read_to_string(path).ok())
@@ -633,8 +818,7 @@ async fn serve_extension_bridge(
     append_bridge_log(
         "bridge_started",
         &format!(
-            "listen=127.0.0.1:9229 expected_source={} expected_token_chars={} expected_token_is_hex={} expected_matches_file={expected_matches_file}",
-            if expected_from_environment { "environment" } else { "file" },
+            "listen=127.0.0.1:9229 expected_source=file expected_token_chars={} expected_token_is_hex={} expected_matches_file={expected_matches_file}",
             token.len(),
             !token.is_empty() && token.bytes().all(|byte| byte.is_ascii_hexdigit())
         ),
@@ -645,7 +829,10 @@ async fn serve_extension_bridge(
             append_bridge_log("connection_rejected", "reason=non_loopback_peer");
             continue;
         }
-        append_bridge_log("connection_accepted", &format!("peer={} origin_check=expected_extension", peer.ip()));
+        append_bridge_log(
+            "connection_accepted",
+            &format!("peer={} origin_check=expected_extension", peer.ip()),
+        );
         let expected_origin = format!("chrome-extension://{extension_id}");
         let handshake = async_tungstenite::tokio::accept_hdr_async(
             stream,
@@ -668,7 +855,10 @@ async fn serve_extension_bridge(
         )
         .await;
         let Ok(mut socket) = handshake else {
-            append_bridge_log("websocket_handshake_rejected", "reason=origin_mismatch_or_invalid_handshake");
+            append_bridge_log(
+                "websocket_handshake_rejected",
+                "reason=origin_mismatch_or_invalid_handshake",
+            );
             continue;
         };
         let hello = tokio::time::timeout(Duration::from_secs(5), socket.next()).await;
@@ -681,7 +871,10 @@ async fn serve_extension_bridge(
                 Ok(Some(Ok(Message::Text(text)))) => serde_json::from_str::<serde_json::Value>(text).ok().and_then(|value| value.get("token").and_then(|token| token.as_str()).map(|received| format!("received_token_chars={} received_token_is_hex={} received_matches_file={}", received.len(), !received.is_empty() && received.bytes().all(|byte| byte.is_ascii_hexdigit()), token_file.as_deref() == Some(received)))).unwrap_or_else(|| "received_token=missing_or_invalid".to_owned()),
                 _ => "received_token=unavailable".to_owned(),
             };
-            append_bridge_log("authentication_rejected", &format!("reason={reason} {received_metadata}"));
+            append_bridge_log(
+                "authentication_rejected",
+                &format!("reason={reason} {received_metadata}"),
+            );
             let rejection = serde_json::json!({"type":"hello","ok":false,"error":reason});
             let _ = socket
                 .send(Message::Text(rejection.to_string().into()))
@@ -921,6 +1114,16 @@ async fn run_mcp_stdio(port: u16, extension_id: &str) -> Result<()> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    if std::env::current_exe()
+        .ok()
+        .and_then(|path| {
+            path.file_name()
+                .map(|name| name == "brave-cli-native-host.exe")
+        })
+        .unwrap_or(false)
+    {
+        return run_native_messaging_host();
+    }
     let cli = Cli::parse();
     let file = cli
         .config
@@ -1111,6 +1314,10 @@ async fn main() -> Result<()> {
             }
         }
         Command::BridgeToken => println!("{}", read_bridge_token()?),
+        Command::NativeHostInstall { extension_id } => {
+            install_native_messaging_host(&extension_id)?
+        }
+        Command::NativeHostUninstall => uninstall_native_messaging_host()?,
         Command::Mcp {
             bridge_port,
             extension_id,
