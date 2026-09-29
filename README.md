@@ -25,6 +25,31 @@ Load `extension/` unpacked from `brave://extensions`, copy its displayed ID, ins
 
 Native Messaging supplies the bridge's current local token to the exact allowed extension ID, eliminating manual token copying and stale-token mismatches. The extension's `debugger` permission is powerful and applies to attached tabs. The WebSocket bridge binds only to loopback, pins the extension ID, requires the token, and rejects local/private IP URLs. It cannot inspect browser chrome or all rendered pixels. Remove the per-user host registration with `brave-cli native-host-uninstall`.
 
+### Direct CDP MCP (no extension)
+
+If Brave was already started with remote debugging enabled on loopback, connect MCP directly without the extension, Native Messaging, or bridge token:
+
+```powershell
+brave-cli mcp --cdp-url http://127.0.0.1:9222
+```
+
+The direct MCP tools list page targets; select one explicitly with `browser_select_tab` before inspection or navigation. It exposes semantic DOM/accessibility inspection, navigation to public HTTP(S) URLs, and opening a new tab. It does not expose arbitrary JavaScript, cookies, browser storage, credential values, clicks, form submission, or downloads. CDP itself grants broad control to any local process able to reach its endpoint, so the client accepts loopback endpoints only and does not start or restart Brave.
+
+Direct CDP cannot attach after the fact to a browser process that did not start with remote debugging. Enabling it may require restarting Brave. Chromium-based browser behavior around remote debugging and the default profile varies by version; Chrome 136+ requires a non-standard user-data directory for these flags, which creates a separate browser data directory and does not reuse the signed-in profile. This project never copies or changes your profile to enable CDP. If no CDP endpoint is already active, use the extension mode above to control a selected tab in the current session.
+
+Configure direct MCP in Codex with:
+
+```json
+{
+  "mcpServers": {
+    "brave-browser": {
+      "command": "C:\\Users\\<user>\\.cargo\\bin\\brave-cli.exe",
+      "args": ["mcp", "--cdp-url", "http://127.0.0.1:9222"]
+    }
+  }
+}
+```
+
 See [extension setup and protocol](extension/README.md) and [browser connection research](docs/browser-connection-research.md).
 
 ## Inspect without screenshots
