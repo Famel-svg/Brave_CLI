@@ -1,0 +1,451 @@
+const WS_URL = 'ws://127.0.0.1:9229';
+const HEARTBEAT_MS = 20_000;
+const MAX_MESSAGE_CHARS = 4_000_000;
+let socket = null;
+let reconnectDelay = 500;
+let attachedTabId = null;
+let attachedTab = null;
+let authenticated = false;
+let bridgeError = '';
+let authRejected = false;
+let tokenMismatch = false;
+let tokenLoaded = false;
+let activeBridgeToken = '';
+let activeTokenSource = 'none';
+let nativeHostState = 'starting';
+let nativeRecoveryInProgress = false;
+let storageRevision = 0;
+const WORKER_BUILD = '0.1.9';
+const NATIVE_HOST = 'com.famel.brave_cli';
+const DIAGNOSTIC_KEY = 'bridgeDiagnostics';
+const DIAGNOSTIC_LIMIT = 200;
+let diagnosticSequence = 0;
+let diagnosticWrite = Promise.resolve();
+
+function tokenMetadata(token) {
+  return {
+    present: typeof token === 'string' && token.length > 0,
+    length: typeof token === 'string' ? token.length : 0,
+    hexadecimal: typeof token === 'string' && /^[0-9a-f]+$/i.test(token)
+  };
+}
+
+function recordDiagnostic(event, details = {}) {
+  const entry = {
+    at: new Date().toISOString(),
+    sequence: ++diagnosticSequence,
+    build: WORKER_BUILD,
+    event,
+    ...details
+  };
+  diagnosticWrite = diagnosticWrite.then(async () => {
+    const stored = await chrome.storage.local.get(DIAGNOSTIC_KEY);
+    const entries = Array.isArray(stored[DIAGNOSTIC_KEY]) ? stored[DIAGNOSTIC_KEY] : [];
+    entries.push(entry);
+    await chrome.storage.local.set({ [DIAGNOSTIC_KEY]: entries.slice(-DIAGNOSTIC_LIMIT) });
+  }).catch(() => {});
+}
+
+const notifyPopup = () => chrome.runtime.sendMessage({ type: 'ui.changed' }).catch(() => {});
+const safeError = (e) => String(e?.message || e).slice(0, 500);
+const redactText = (value) => String(value || '').replace(/\b(password|passwd|secret|token|cookie|authorization|api[_-]?key)\s*[:=]\s*[^\s,;]+/ig, '$1=[REDACTED]').slice(0, 1200);
+
+function send(payload) {
+  if (!socket || socket.readyState !== WebSocket.OPEN) throw new Error('Local bridge is disconnected');
+  const frame = JSON.stringify(payload);
+  if (frame.length > MAX_MESSAGE_CHARS) throw new Error('Bridge message exceeds size limit');
+  socket.send(frame);
+}
+
+async function recoverNativeTokenAfterMismatch() {
+  if (nativeRecoveryInProgress) return;
+  nativeRecoveryInProgress = true;
+  const requestRevision = storageRevision;
+  recordDiagnostic('native_token_recovery_started', {
+    trigger: 'token_mismatch',
+    previousTokenSource: activeTokenSource,
+    storageRevision: requestRevision
+  });
+  try {
+    const response = await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'get_bridge_token' });
+    if (!response?.ok || typeof response.token !== 'string' || !/^[0-9a-f]{32,4096}$/i.test(response.token)) {
+      throw new Error(response?.error || 'Native host returned invalid token metadata');
+    }
+    if (requestRevision !== storageRevision) {
+      recordDiagnostic('native_token_recovery_superseded', { reason: 'storage_changed_during_request', storageRevision });
+      if (!tokenMismatch && !authRejected) connectBridge();
+      return;
+    }
+    nativeHostState = 'connected';
+    if (response.token === activeBridgeToken) {
+      bridgeError = 'token mismatch; Native Messaging returned the same token';
+      recordDiagnostic('native_token_recovery_no_change', {
+        tokenSource: activeTokenSource,
+        token: tokenMetadata(activeBridgeToken)
+      });
+      notifyPopup();
+      return;
+    }
+    activeBridgeToken = response.token;
+    activeTokenSource = 'native_messaging';
+    tokenLoaded = true;
+    tokenMismatch = false;
+    authRejected = false;
+    bridgeError = '';
+    recordDiagnostic('native_token_recovery_succeeded', {
+      tokenSource: activeTokenSource,
+      token: tokenMetadata(activeBridgeToken)
+    });
+    notifyPopup();
+    reconnectBridge();
+  } catch (error) {
+    nativeHostState = 'unavailable';
+    bridgeError = `token mismatch; Native Messaging recovery failed: ${redactText(safeError(error))}`;
+    recordDiagnostic('native_token_recovery_failed', { error: redactText(safeError(error)) });
+    notifyPopup();
+  } finally {
+    nativeRecoveryInProgress = false;
+  }
+}
+
+async function connectBridge() {
+  if (!tokenLoaded) { recordDiagnostic('connect_skipped', { reason: 'token_not_loaded' }); return; }
+  if (authRejected) { recordDiagnostic('connect_skipped', { reason: 'authentication_rejected' }); return; }
+  if (tokenMismatch) { recordDiagnostic('connect_skipped', { reason: 'token_mismatch' }); return; }
+  if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return;
+  recordDiagnostic('connect_start', { endpoint: 'ws://127.0.0.1:9229' });
+  const ws = new WebSocket(WS_URL);
+  socket = ws;
+  authenticated = false;
+  bridgeError = '';
+  ws.addEventListener('open', async () => {
+    reconnectDelay = 500;
+    try {
+      const revision = storageRevision;
+      if (revision !== storageRevision || socket !== ws) {
+        recordDiagnostic('hello_suppressed', { reason: 'storage_changed_during_read', readRevision: revision, currentRevision: storageRevision });
+        return;
+      }
+      recordDiagnostic('hello_sent', { protocol: 1, storageRevision: revision, token: tokenMetadata(activeBridgeToken), tokenSource: activeTokenSource });
+      ws.send(JSON.stringify({ type: 'hello', protocol: 1, token: activeBridgeToken }));
+      notifyPopup();
+    } catch (e) {
+      bridgeError = safeError(e);
+      recordDiagnostic('hello_failed_locally', { error: bridgeError });
+      ws.close();
+    }
+  });
+  ws.addEventListener('message', (event) => {
+    if (socket !== ws) return;
+    if (typeof event.data !== 'string' || event.data.length > MAX_MESSAGE_CHARS) {
+      ws.close(4009, 'Message too large');
+      return;
+    }
+    let message;
+    try { message = JSON.parse(event.data); } catch { ws.close(4007, 'Invalid JSON'); return; }
+    if (message?.type === 'hello' && message.ok === true) {
+      authenticated = true;
+      authRejected = false;
+      tokenMismatch = false;
+      bridgeError = '';
+      recordDiagnostic('authentication_accepted');
+      notifyPopup();
+      return;
+    }
+    if (message?.type === 'hello' && message.ok !== true) {
+      authenticated = false;
+      bridgeError = String(message.error || 'Authentication rejected').slice(0, 300);
+      tokenMismatch = message.code === 'TOKEN_MISMATCH'
+        || bridgeError.trim().toLowerCase() === 'token mismatch';
+      authRejected = !tokenMismatch;
+      recordDiagnostic('authentication_rejected', { reason: bridgeError, retryBlocked: authRejected || tokenMismatch });
+      notifyPopup();
+      if (tokenMismatch) void recoverNativeTokenAfterMismatch();
+      // Browser WebSocket API reserves 1008; use an application-defined code.
+      ws.close(4008, bridgeError);
+      return;
+    }
+    if (message?.type === 'request' && typeof message.id === 'string') {
+      handleRequest(message).then((result) => send({ type: 'response', id: message.id, ok: true, result }))
+        .catch((e) => {
+          try { send({ type: 'response', id: message.id, ok: false, error: safeError(e) }); } catch {}
+        });
+    }
+  });
+  ws.addEventListener('error', () => {
+    if (socket !== ws) return;
+    bridgeError = 'Cannot reach ws://127.0.0.1:9229';
+    recordDiagnostic('websocket_error', { endpoint: 'ws://127.0.0.1:9229', readyState: ws.readyState });
+    notifyPopup();
+  });
+  ws.addEventListener('close', (event) => {
+    if (socket !== ws) return;
+    socket = null;
+    authenticated = false;
+    recordDiagnostic('websocket_closed', { code: event.code, reason: String(event.reason || '').slice(0, 120), wasClean: event.wasClean });
+    notifyPopup();
+    if (authRejected || tokenMismatch) return;
+    const wait = reconnectDelay;
+    reconnectDelay = Math.min(reconnectDelay * 2, 15_000);
+    setTimeout(connectBridge, wait);
+  });
+}
+
+function reconnectBridge(reloadStoredToken = false) {
+  authRejected = false;
+  tokenMismatch = false;
+  authenticated = false;
+  bridgeError = '';
+  const previous = socket;
+  socket = null;
+  if (previous && previous.readyState !== WebSocket.CLOSED) {
+    try { previous.close(1000, 'reconnect requested'); } catch {}
+  }
+  if (reloadStoredToken && nativeHostState !== 'connected') {
+    chrome.storage.local.get('bridgeToken').then(({ bridgeToken = '' }) => {
+      activeBridgeToken = bridgeToken;
+      activeTokenSource = 'extension_storage';
+      tokenLoaded = true;
+      connectBridge();
+    }).catch((error) => {
+      bridgeError = safeError(error);
+      recordDiagnostic('token_reload_failed', { error: bridgeError });
+      notifyPopup();
+    });
+  } else {
+    connectBridge();
+  }
+  notifyPopup();
+}
+
+setInterval(() => {
+  if (socket?.readyState === WebSocket.OPEN) {
+    try { send({ type: 'ping', at: Date.now() }); } catch {}
+  } else if (!authRejected) connectBridge();
+}, HEARTBEAT_MS);
+connectBridge();
+
+chrome.runtime.onInstalled.addListener(() => connectBridge());
+chrome.runtime.onStartup.addListener(() => connectBridge());
+const startupStorageRevision = storageRevision;
+async function initializeBridgeToken() {
+  try {
+    await chrome.storage.local.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' });
+  } catch (error) {
+    recordDiagnostic('storage_access_restriction_failed', { error: safeError(error) });
+  }
+  try {
+    const response = await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'get_bridge_token' });
+    if (!response?.ok || typeof response.token !== 'string' || !/^[0-9a-f]{32,4096}$/i.test(response.token)) {
+      throw new Error(response?.error || 'Native host returned invalid token metadata');
+    }
+    const nativeTokenChanged = activeBridgeToken !== response.token
+      || activeTokenSource !== 'native_messaging';
+    activeBridgeToken = response.token;
+    activeTokenSource = 'native_messaging';
+    nativeHostState = 'connected';
+    tokenLoaded = true;
+    recordDiagnostic('native_token_loaded', { token: tokenMetadata(activeBridgeToken), tokenSource: activeTokenSource });
+    if (nativeTokenChanged) reconnectBridge();
+  } catch (error) {
+    nativeHostState = 'unavailable';
+    const fallbackRevision = storageRevision;
+    const { bridgeToken = '' } = await chrome.storage.local.get('bridgeToken').catch(() => ({}));
+    if (fallbackRevision === storageRevision && activeTokenSource !== 'native_messaging') {
+      activeBridgeToken = bridgeToken;
+      activeTokenSource = 'extension_storage';
+    }
+    tokenLoaded = true;
+    recordDiagnostic('native_host_unavailable', { reason: safeError(error), fallbackToken: tokenMetadata(activeBridgeToken) });
+  }
+  recordDiagnostic('worker_started', { tokenSource: activeTokenSource, token: tokenMetadata(activeBridgeToken) });
+  connectBridge();
+}
+
+initializeBridgeToken().catch((error) => {
+  if (storageRevision !== startupStorageRevision) return;
+  nativeHostState = 'failed';
+  bridgeError = safeError(error);
+  recordDiagnostic('token_initialization_failed', { error: bridgeError });
+  notifyPopup();
+});
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && changes.bridgeToken) {
+    if (nativeHostState === 'connected') {
+      recordDiagnostic('ignored_storage_token_change_native_authoritative', { storageRevision });
+      return;
+    }
+    storageRevision += 1;
+    activeBridgeToken = changes.bridgeToken.newValue || '';
+    activeTokenSource = 'extension_storage';
+    tokenLoaded = true;
+    tokenMismatch = false;
+    authRejected = false;
+    recordDiagnostic('token_storage_changed', { storageRevision, token: tokenMetadata(changes.bridgeToken.newValue || '') });
+    reconnectBridge();
+  }
+});
+
+chrome.debugger.onDetach.addListener((source, reason) => {
+  if (source.tabId === attachedTabId) {
+    attachedTabId = null;
+    attachedTab = null;
+    bridgeError = reason === 'target_closed' ? 'Attached tab closed' : `Debugger detached: ${reason}`;
+    notifyPopup();
+  }
+});
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (tabId !== attachedTabId || (!changeInfo.url && changeInfo.status !== 'complete')) return;
+  attachedTab = {
+    tabId,
+    title: (tab.title || attachedTab?.title || '').slice(0, 500),
+    url: tab.url || attachedTab?.url || ''
+  };
+  notifyPopup();
+});
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  if (tabId === attachedTabId) {
+    attachedTabId = null;
+    attachedTab = null;
+    notifyPopup();
+  }
+});
+
+chrome.runtime.onMessage.addListener((message, sender, respond) => {
+  if (!message || typeof message.type !== 'string') return;
+  if (message.type === 'ui.status') {
+    respond({ bridgeConnected: socket?.readyState === WebSocket.OPEN, authenticated, bridgeError, attached: attachedTab, workerBuild: WORKER_BUILD, tokenLoaded, storageRevision, tokenMismatch, authRejected, nativeHostState, tokenSource: activeTokenSource });
+    return;
+  }
+  if (message.type === 'ui.diagnostics') {
+    if (sender.id !== chrome.runtime.id || !sender.url?.endsWith('/options.html')) {
+      respond({ error: 'Diagnostics are available only in extension settings.' });
+      return;
+    }
+    chrome.storage.local.get(DIAGNOSTIC_KEY).then((stored) => respond({ entries: stored[DIAGNOSTIC_KEY] || [] })).catch((error) => respond({ error: safeError(error) }));
+    return true;
+  }
+  if (message.type === 'ui.clearDiagnostics') {
+    if (sender.id !== chrome.runtime.id || !sender.url?.endsWith('/options.html')) {
+      respond({ error: 'Diagnostics are available only in extension settings.' });
+      return;
+    }
+    chrome.storage.local.remove(DIAGNOSTIC_KEY).then(() => {
+      recordDiagnostic('diagnostics_cleared');
+      respond({ ok: true });
+    }).catch((error) => respond({ error: safeError(error) }));
+    return true;
+  }
+  if (message.type === 'ui.attachActive') {
+    attachActiveTab().then(() => respond({ ok: true })).catch((e) => respond({ error: safeError(e) }));
+    return true;
+  }
+  if (message.type === 'ui.detach') {
+    detachTab().then(() => respond({ ok: true })).catch((e) => respond({ error: safeError(e) }));
+    return true;
+  }
+  if (message.type === 'bridge.reconnect') {
+    reconnectBridge(true);
+    respond({ ok: true });
+    return;
+  }
+});
+
+function parseHttpUrl(value) {
+  if (typeof value !== 'string' || value.length > 8192) throw new Error('URL must be a string under 8192 characters');
+  let url;
+  try { url = new URL(value); } catch { throw new Error('Invalid URL'); }
+  if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Only HTTP and HTTPS URLs are allowed');
+  if (url.username || url.password) throw new Error('URLs with embedded credentials are rejected');
+  return url.href;
+}
+
+function requireAuth() {
+  if (!authenticated) throw new Error('Bridge is not authenticated');
+}
+
+function requireTab() {
+  if (!Number.isInteger(attachedTabId)) throw new Error('No tab attached; attach explicitly from extension popup');
+  return { tabId: attachedTabId };
+}
+
+async function handleRequest(request) {
+  requireAuth();
+  if (typeof request.id !== 'string' || request.id.length > 128) throw new Error('Invalid request id');
+  if (!request.command || typeof request.command !== 'string') throw new Error('Missing command');
+  const params = request.params && typeof request.params === 'object' && !Array.isArray(request.params) ? request.params : {};
+  switch (request.command) {
+    case 'status':
+      return { attached: attachedTab !== null, tab: attachedTab, bridgeConnected: socket?.readyState === WebSocket.OPEN };
+    case 'inspect':
+      return inspectAttachedTab();
+    case 'navigate': {
+      const url = parseHttpUrl(params.url);
+      await chrome.tabs.update(requireTab().tabId, { url });
+      return { navigated: true, url };
+    }
+    case 'openTab': {
+      const url = parseHttpUrl(params.url);
+      const tab = await chrome.tabs.create({ url, active: true });
+      return { opened: true, tabId: tab.id, url: tab.url || url };
+    }
+    default: throw new Error(`Unsupported command: ${request.command.slice(0, 80)}`);
+  }
+}
+
+async function attachActiveTab() {
+  if (attachedTabId !== null) throw new Error('Detach current tab before attaching another');
+  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  if (!tab || !Number.isInteger(tab.id)) throw new Error('No active tab found');
+  parseHttpUrl(tab.url || '');
+  await chrome.debugger.attach({ tabId: tab.id }, '1.3');
+  attachedTabId = tab.id;
+  attachedTab = { tabId: tab.id, title: (tab.title || '').slice(0, 500), url: tab.url || '' };
+  bridgeError = '';
+  notifyPopup();
+}
+
+async function detachTab() {
+  if (attachedTabId === null) return;
+  const tabId = attachedTabId;
+  await chrome.debugger.detach({ tabId });
+  attachedTabId = null;
+  attachedTab = null;
+  notifyPopup();
+}
+
+async function inspectAttachedTab() {
+  const target = requireTab();
+  const expression = `(() => {
+    const visible = e => { const r=e.getBoundingClientRect(),s=getComputedStyle(e); return r.width>0&&r.height>0&&r.bottom>0&&r.right>0&&r.top<innerHeight&&r.left<innerWidth&&s.display!=='none'&&s.visibility!=='hidden'&&Number(s.opacity)>0; };
+    const sensitive = e => { const words=[e.type,e.name,e.id,e.getAttribute('autocomplete'),e.getAttribute('aria-label'),e.getAttribute('placeholder'),e.labels?[...e.labels].map(x=>x.innerText).join(' '):''].join(' '); return /password|passwd|secret|token|cookie|authorization|api[_-]?key|credential|private|cvv|card/i.test(words); };
+    const clean = s => (s||'').replace(/\\b(password|passwd|secret|token|cookie|authorization|api[_-]?key)\\s*[:=]\\s*[^\\s,;]+/ig,'$1=[REDACTED]').slice(0,1200);
+    let text=clean(document.body?.innerText||'');
+    for(const e of document.querySelectorAll('input,textarea,[contenteditable=true]')) if(sensitive(e)&&e.value) text=text.split(e.value).join('[REDACTED]');
+    const elements=[...document.querySelectorAll('a,button,input,textarea,select,[role],img,video,canvas,iframe,summary')].filter(visible).slice(0,1200).map(e=>{
+      const r=e.getBoundingClientRect(), secret=(e.matches('input,textarea,[contenteditable=true]')&&sensitive(e));
+      const name=secret?'[REDACTED FIELD]':clean(e.getAttribute('aria-label')||e.getAttribute('alt')||e.getAttribute('title')||e.innerText||e.textContent||'');
+      return {tag:e.tagName.toLowerCase(),role:e.getAttribute('role')||'',name,text:secret?'[REDACTED]':clean(e.innerText||e.textContent||''),href:e instanceof HTMLAnchorElement?e.href:null,rect:{x:r.x,y:r.y,width:r.width,height:r.height},disabled:!!e.disabled};
+    });
+    const u=new URL(location.href); return {url:u.href,title:document.title.slice(0,500),viewport:{width:innerWidth,height:innerHeight,devicePixelRatio},scroll:{x:scrollX,y:scrollY,documentWidth:document.documentElement.scrollWidth,documentHeight:document.documentElement.scrollHeight},text,visibleElements:elements};
+  })()`;
+  const [{ result }, ax] = await Promise.all([
+    chrome.debugger.sendCommand(target, 'Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true }),
+    chrome.debugger.sendCommand(target, 'Accessibility.enable', {}).then(() => chrome.debugger.sendCommand(target, 'Accessibility.getFullAXTree', {}))
+  ]);
+  if (result?.exceptionDetails) throw new Error('Page inspection failed');
+  const snapshot = result?.result?.value;
+  if (!snapshot || typeof snapshot !== 'object') throw new Error('Page inspection returned no snapshot');
+snapshot.accessibilityTree = (ax?.nodes || []).slice(0, 5000).map((node) => ({
+    role: node.role?.value || '',
+    name: ['textbox', 'searchbox', 'combobox', 'spinbutton'].includes(node.role?.value)
+      ? '[REDACTED FIELD]'
+      : redactText(node.name?.value || ''),
+    description: ['textbox', 'searchbox', 'combobox', 'spinbutton'].includes(node.role?.value)
+      ? ''
+      : redactText(node.description?.value || '')
+  }));
+  return snapshot;
+}

@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Brave Browser Bridge settings</title>
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <main>
+    <h1>Local bridge settings</h1>
+    <p>Bridge endpoint fixed to <code>ws://127.0.0.1:9229</code>.</p>
+    <label for="token">Bridge token</label>
+    <input id="token" type="password" autocomplete="off" spellcheck="false">
+    <button id="toggle-token-visibility" type="button" aria-controls="token" aria-pressed="false">Show token</button>
+    <p>The token is hidden again after 10 seconds, when this page loses focus, or when it becomes hidden.</p>
+    <button id="save" type="button">Save token</button>
+    <p>The native host reads the bridge token directly for this extension. Manual import remains as a fallback.</p>
+    <input id="token-file" type="file" accept=".token,.txt,text/plain">
+    <button id="import" type="button">Import token file and connect</button>
+    <button id="compare" type="button">Compare selected file with saved token</button>
+    <p>The comparison runs locally with SHA-256. Only match/mismatch is shown; no token or hash is displayed or sent.</p>
+    <h2>Connection diagnostics</h2>
+    <p id="diagnostic-summary">Loading local diagnostics…</p>
+    <button id="refresh-diagnostics" type="button">Refresh diagnostics</button>
+    <button id="export-diagnostics" type="button">Export sanitized log</button>
+    <button id="clear-diagnostics" type="button">Clear diagnostics</button>
+    <pre id="diagnostics" aria-live="polite"></pre>
+    <p class="warning">The debugger permission grants broad CDP access to attached tabs. Only attach tabs you intend to let the local bridge control.</p>
+    <output id="status" aria-live="polite"></output>
+  </main>
+  <script src="options.js" type="module"></script>
+</body>
+</html>

@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Brave Browser Bridge</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main>
+    <h1>Brave Browser Bridge</h1>
+    <p id="connection" role="status">Connecting to local bridge…</p>
+    <button id="reconnect" type="button">Reconnect bridge</button>
+    <p id="tab">No tab attached</p>
+    <div class="actions">
+      <button id="attach" type="button">Attach to current tab</button>
+      <button id="detach" type="button" disabled>Detach</button>
+    </div>
+    <p class="note">Attach is explicit. The AI bridge can inspect and control attached tab.</p>
+    <a href="options.html" target="_blank">Bridge settings</a>
+    <pre id="error" aria-live="polite"></pre>
+  </main>
+  <script src="popup.js" type="module"></script>
+</body>
+</html>

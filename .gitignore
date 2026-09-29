@@ -7,6 +7,15 @@ __pycache__/
 .pyright/
 htmlcov/
 dist/
+target/
+.rust-toolchain/
+.tmp-*
+.claude-flow/
+.swarm/
 build/
 *.egg-info/
 smoke.png
+
+# Local extension signing artifacts
+/extension.pem
+/extension.crx
