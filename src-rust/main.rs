@@ -182,7 +182,7 @@ const INSPECT_JS: &str = r#"() => {
     const r=e.getBoundingClientRect(), tag=e.tagName.toLowerCase(), type=(e.getAttribute('type')||'').toLowerCase();
     const secret=e.matches('input,textarea,[contenteditable="true"]') && (type==='password' || sensitive.test([e.name,e.id,e.getAttribute('autocomplete'),e.getAttribute('aria-label'),e.getAttribute('placeholder'),e.labels?[...e.labels].map(l=>l.innerText).join(' '):''].join(' ')));
     const label=secret ? '[REDACTED FIELD]' : name(e);
-    return {tag, role:e.getAttribute('role')||({a:'link',button:'button',input:'textbox',textarea:'textbox',select:'combobox'}[tag]||tag), name:label, text:secret?'[REDACTED]':clean(e.value||e.innerText||e.textContent||''), selector:e.id?'#'+CSS.escape(e.id):`${tag}:nth-of-type(${[...e.parentElement.children].filter(x=>x.tagName===e.tagName).indexOf(e)+1})`, rect:{x:r.x,y:r.y,width:r.width,height:r.height},disabled:!!e.disabled};
+    return {tag, role:e.getAttribute('role')||({a:'link',button:'button',input:'textbox',textarea:'textbox',select:'combobox'}[tag]||tag), name:label, text:secret?'[REDACTED]':clean(e.matches('input,textarea,select,[contenteditable="true"]')?'':e.innerText||e.textContent||''), selector:e.id?'#'+CSS.escape(e.id):`${tag}:nth-of-type(${[...e.parentElement.children].filter(x=>x.tagName===e.tagName).indexOf(e)+1})`, rect:{x:r.x,y:r.y,width:r.width,height:r.height},disabled:!!e.disabled};
   });
   const active=document.activeElement;
   let pageText=clean(document.body?.innerText||'');
@@ -1795,6 +1795,14 @@ mod tests {
         assert_eq!(json["accessibility_tree"][0]["role"], "button");
         assert_eq!(json["viewport"]["width"], 1280.0);
         assert_eq!(json["limits"], "DOM only");
+    }
+
+    #[test]
+    fn inspect_never_serializes_form_control_values() {
+        assert!(
+            INSPECT_JS.contains("e.matches('input,textarea,select,[contenteditable=\"true\"]')?''")
+        );
+        assert!(!INSPECT_JS.contains("clean(e.value"));
     }
 
     #[test]

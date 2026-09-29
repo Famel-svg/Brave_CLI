@@ -10,9 +10,9 @@ A extensão pode compartilhar uma aba da sessão autenticada depois que você a 
 
 A inspeção usa DOM visível, controles, geometria e árvore de acessibilidade. Não representa pixels de canvas, quadros de vídeo, conteúdo oculto ou fora da tela, interface do navegador nem outras janelas. Pesquisa de notícias, verificação de fontes e citações pertencem ao fluxo do agente; o bridge oferece estado do navegador, inspeção, navegação e abertura de abas.
 
-## Usar a sessão Brave já aberta: extensão
+## Extensão para compartilhar uma aba da sessão atual
 
-A extensão Manifest V3 é o caminho para compartilhar uma aba do perfil Brave já autenticado. Ela só conecta depois do clique em **Attach to current tab**. A permissão `debugger` é ampla; conecte apenas a aba que quer compartilhar e desconecte ao terminar.
+A extensão Manifest V3 foi projetada para compartilhar uma aba do perfil Brave já autenticado. A configuração Native Messaging e a recuperação automática do token ainda não foram validadas ponta a ponta no Brave deste projeto; o histórico inclui `token mismatch` e host Native Messaging não encontrado. Trate esta rota como experimental até confirmar a conexão no seu perfil. Ela só anexa após o clique em **Attach to current tab**. A permissão `debugger` é ampla; conecte apenas a aba que quer compartilhar e desconecte ao terminar.
 
 Compile a CLI:
 
@@ -39,7 +39,7 @@ Configure o servidor MCP no Codex e reinicie o cliente:
 }
 ```
 
-O host local fornece à extensão o token atual, evitando cópia manual. A ponte WebSocket fica vinculada a `127.0.0.1`, valida o ID da extensão e rejeita destinos IP locais/privados. Remova o registro Native Messaging com `brave-cli native-host-uninstall`.
+O host local foi implementado para fornecer à extensão o token atual e evitar cópia manual. A ponte WebSocket fica vinculada a `127.0.0.1` e valida o ID da extensão. A validação de destino IP local/privado é aplicada pelo MCP direto, não pela rota da extensão. Remova o registro Native Messaging com `brave-cli native-host-uninstall`.
 
 ## MCP direto via CDP: sem extensão
 
@@ -51,7 +51,7 @@ brave-cli mcp --cdp-url http://127.0.0.1:9222
 
 O MCP lista as abas HTTP(S) públicas; selecione explicitamente uma com `browser_select_tab` antes de inspecionar ou navegar. O modo direto não expõe ferramentas MCP para JavaScript arbitrário, cookies, storage, credenciais, cliques ou envio de formulários. CDP continua sendo uma interface de alto privilégio para processos locais que alcançam sua porta. A CLI aceita somente endpoints loopback e não inicia nem reinicia o Brave.
 
-CDP não consegue anexar depois a um processo que iniciou sem depuração remota. O comando com `--user-data-dir` abre um perfil separado e persistente; ele não usa sua sessão autenticada habitual. O Chrome 136+ exige diretório de dados não padrão para essas flags; o comportamento exato depende da versão Chromium incluída no Brave. [Referência oficial do Chrome](https://developer.chrome.com/blog/remote-debugging-port).
+CDP não consegue anexar depois a um processo que iniciou sem depuração remota. O comando com `--user-data-dir` abre um perfil separado e persistente; ele não usa sua sessão autenticada habitual. A documentação do Chrome 136+ exige diretório de dados não padrão para essas flags do Chrome; não assuma que a mesma regra ou versão vale para toda versão do Brave. [Referência oficial do Chrome](https://developer.chrome.com/blog/remote-debugging-port).
 
 Configuração MCP:
 
@@ -84,7 +84,7 @@ brave-cli inspect --format json --max-nodes 800
 brave-cli inspect --format dom
 ```
 
-A inspeção retorna título, URL, viewport, rolagem, elemento focado, texto visível, controles/mídia visíveis com retângulos e árvore de acessibilidade. A saída tem limites e redige campos sensíveis comuns. Não mostra pixels do canvas, quadros de vídeo, interface do navegador, outras janelas ou conteúdo fora da tela.
+A inspeção retorna título, URL, viewport, rolagem, elemento focado, texto visível, controles/mídia visíveis com retângulos e árvore de acessibilidade. Valores de controles de formulário não são incluídos. A saída tem limites e redige padrões sensíveis comuns no restante do texto. Não mostra pixels do canvas, quadros de vídeo, interface do navegador, outras janelas ou conteúdo fora da tela.
 
 ## Conectar e controlar uma instância de teste
 
@@ -97,8 +97,8 @@ brave-cli tabs
 brave-cli start
 brave-cli --allow-domain example.com tab open https://example.com
 brave-cli --allow-domain example.com navigate https://example.com
-brave-cli click 'button#submit' --confirm
-brave-cli fill '#name' 'Rafael' --confirm
+brave-cli --allow-domain example.com click 'button#submit' --confirm
+brave-cli --allow-domain example.com fill '#name' 'Rafael' --confirm
 ```
 
 A configuração vem de `--config config.toml`, depois da variável `BRAVE_CLI_CDP_URL`, e recebe as allowlists passadas na CLI e em `BRAVE_CLI_ALLOWED_DOMAINS`. Navegação e abertura de abas exigem domínio exato ou subdomínio permitido. `click` e `fill` exigem `--confirm` para operações arriscadas. Todo JavaScript executado no contexto da página exige confirmação e não é uma sandbox; não execute scripts não confiáveis. `--dry-run` não conecta nem altera estado.
@@ -123,11 +123,11 @@ cargo test
 cargo build --release
 ```
 
-Testes CDP ao vivo devem usar perfil Brave descartável. A conexão com a sessão pessoal depende da extensão ou de um endpoint CDP que já esteja ativo e precisa ser verificada no Brave-alvo.
+Os comandos de teste CDP ao vivo abaixo são instruções manuais, não evidência de teste automatizado. Valide-os em perfil Brave descartável. A conexão com a sessão pessoal depende da extensão ou de um endpoint CDP que já esteja ativo e precisa ser verificada no Brave-alvo.
 
 ## Funcionalidades da CLI
 
-A CLI Rust também inclui `start`, `tabs`, `navigate`, `tab open`, `click`, `fill`, `evaluate` e workflows YAML com etapas opcionais de screenshot para um navegador explicitamente habilitado para CDP. `start` usa perfil isolado. `inspect` retorna texto e árvore sem screenshots.
+A CLI Rust também inclui `start`, `tabs`, `navigate`, `tab open`, `click`, `fill`, `evaluate` e workflows YAML. Captura de screenshot é um comando opcional (`page screenshot`) para navegador explicitamente habilitado para CDP; `inspect` retorna texto e árvore sem screenshots. `start` usa perfil isolado.
 
 ```powershell
 brave-cli evaluate 'document.title'
