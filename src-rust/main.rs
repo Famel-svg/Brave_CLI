@@ -763,6 +763,10 @@ fn set_native_messaging_stdio_binary() -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
+fn append_bridge_log(_event: &str, _details: &str) {}
+
+#[cfg(not(test))]
 fn append_bridge_log(event: &str, details: &str) {
     let Ok(path) = bridge_token_path().map(|path| path.with_file_name("bridge.log")) else {
         return;
