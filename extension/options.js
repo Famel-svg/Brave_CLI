@@ -45,6 +45,30 @@ async function refreshDiagnostics() {
   }
 }
 
+async function recoverNativeMessaging() {
+  let state = await chrome.runtime.sendMessage({ type: 'ui.status' }).catch(() => null);
+  for (let attempt = 0; attempt < 10 && state?.nativeHostState === 'starting'; attempt += 1) {
+    await new Promise(resolve => setTimeout(resolve, 100));
+    state = await chrome.runtime.sendMessage({ type: 'ui.status' }).catch(() => null);
+  }
+  if (state?.authenticated || state?.nativeHostState === 'connected') return;
+  if (state?.tokenMismatch !== true && state?.nativeHostState !== 'unavailable') return;
+
+  status.textContent = 'Retrying the local Native Messaging host…';
+  try {
+    const response = await chrome.runtime.sendNativeMessage('com.famel.brave_cli', {
+      type: 'get_bridge_token'
+    });
+    if (!response?.ok || typeof response.token !== 'string' || !/^[0-9a-f]{32,4096}$/i.test(response.token)) {
+      throw new Error(response?.error || 'Native host returned invalid token metadata');
+    }
+    status.textContent = 'Native host responded. Restarting extension worker with shared token…';
+    setTimeout(() => chrome.runtime.reload(), 250);
+  } catch (error) {
+    status.textContent = `Native host unavailable: ${String(error?.message || error).slice(0, 300)}`;
+  }
+}
+
 chrome.runtime.onMessage.addListener((message) => {
   if (message?.type === 'ui.changed') {
     void refreshBridgeStatus();
@@ -147,6 +171,7 @@ document.querySelector('#compare').addEventListener('click', async () => {
 
 void refreshBridgeStatus();
 void refreshDiagnostics();
+void recoverNativeMessaging();
 document.querySelector('#refresh-diagnostics').addEventListener('click', () => void refreshDiagnostics());
 document.querySelector('#export-diagnostics').addEventListener('click', async () => {
   await refreshDiagnostics();
