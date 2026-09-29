@@ -590,12 +590,12 @@ fn native_host_executable_path() -> Result<PathBuf> {
     Ok(bridge_token_path()?.with_file_name("brave-cli-native-host.exe"))
 }
 
-fn native_messaging_registry_key() -> &'static str {
-    r"HKCU\Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.famel.brave_cli"
-}
-
-fn legacy_chrome_native_messaging_registry_key() -> &'static str {
-    r"HKCU\Software\Google\Chrome\NativeMessagingHosts\com.famel.brave_cli"
+fn native_messaging_registry_keys() -> [&'static str; 3] {
+    [
+        r"HKCU\Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.famel.brave_cli",
+        r"HKCU\Software\Chromium\NativeMessagingHosts\com.famel.brave_cli",
+        r"HKCU\Software\Google\Chrome\NativeMessagingHosts\com.famel.brave_cli",
+    ]
 }
 
 fn install_native_messaging_host(extension_id: &str) -> Result<()> {
@@ -626,31 +626,17 @@ fn install_native_messaging_host(extension_id: &str) -> Result<()> {
     });
     std::fs::write(&manifest, serde_json::to_vec_pretty(&contents)?)
         .context("cannot write native messaging manifest")?;
-    let status = std::process::Command::new("reg.exe")
-        .args([
-            "add",
-            native_messaging_registry_key(),
-            "/ve",
-            "/t",
-            "REG_SZ",
-            "/d",
-        ])
-        .arg(&manifest)
-        .args(["/f"])
-        .status()
-        .context("cannot register native messaging host in current-user registry")?;
-    if !status.success() {
-        bail!("Windows registry rejected native messaging host registration");
+    for key in native_messaging_registry_keys() {
+        let status = std::process::Command::new("reg.exe")
+            .args(["add", key, "/ve", "/t", "REG_SZ", "/d"])
+            .arg(&manifest)
+            .args(["/f"])
+            .status()
+            .context("cannot register native messaging host in current-user registry")?;
+        if !status.success() {
+            bail!("Windows registry rejected native messaging host registration");
+        }
     }
-    // Remove the earlier Chrome-only registration from pre-0.2.1 installs.
-    // Brave on Windows resolves Native Messaging hosts under its own vendor key.
-    let _ = std::process::Command::new("reg.exe")
-        .args([
-            "delete",
-            legacy_chrome_native_messaging_registry_key(),
-            "/f",
-        ])
-        .output();
     println!(
         "Native messaging host installed for extension {extension_id}; manifest {}",
         manifest.display()
@@ -662,15 +648,12 @@ fn uninstall_native_messaging_host() -> Result<()> {
     if !cfg!(windows) {
         bail!("automatic native messaging host removal currently supports Windows only");
     }
-    for key in [
-        native_messaging_registry_key(),
-        legacy_chrome_native_messaging_registry_key(),
-    ] {
+    for key in native_messaging_registry_keys() {
         let status = std::process::Command::new("reg.exe")
             .args(["delete", key, "/f"])
             .output()
             .context("cannot remove native messaging host registry entry")?;
-        if key == native_messaging_registry_key() && !status.status.success() {
+        if key == native_messaging_registry_keys()[0] && !status.status.success() {
             bail!("Windows registry could not remove native messaging host registration");
         }
     }
@@ -1360,14 +1343,14 @@ async fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn native_host_registration_targets_brave_windows_registry() {
+    fn native_host_registration_covers_brave_and_chromium_registry_views() {
         assert_eq!(
-            super::native_messaging_registry_key(),
-            r"HKCU\Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.famel.brave_cli"
-        );
-        assert_eq!(
-            super::legacy_chrome_native_messaging_registry_key(),
-            r"HKCU\Software\Google\Chrome\NativeMessagingHosts\com.famel.brave_cli"
+            super::native_messaging_registry_keys(),
+            [
+                r"HKCU\Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.famel.brave_cli",
+                r"HKCU\Software\Chromium\NativeMessagingHosts\com.famel.brave_cli",
+                r"HKCU\Software\Google\Chrome\NativeMessagingHosts\com.famel.brave_cli",
+            ]
         );
     }
 
