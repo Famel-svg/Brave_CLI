@@ -591,6 +591,10 @@ fn native_host_executable_path() -> Result<PathBuf> {
 }
 
 fn native_messaging_registry_key() -> &'static str {
+    r"HKCU\Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.famel.brave_cli"
+}
+
+fn legacy_chrome_native_messaging_registry_key() -> &'static str {
     r"HKCU\Software\Google\Chrome\NativeMessagingHosts\com.famel.brave_cli"
 }
 
@@ -638,6 +642,15 @@ fn install_native_messaging_host(extension_id: &str) -> Result<()> {
     if !status.success() {
         bail!("Windows registry rejected native messaging host registration");
     }
+    // Remove the earlier Chrome-only registration from pre-0.2.1 installs.
+    // Brave on Windows resolves Native Messaging hosts under its own vendor key.
+    let _ = std::process::Command::new("reg.exe")
+        .args([
+            "delete",
+            legacy_chrome_native_messaging_registry_key(),
+            "/f",
+        ])
+        .output();
     println!(
         "Native messaging host installed for extension {extension_id}; manifest {}",
         manifest.display()
@@ -649,12 +662,17 @@ fn uninstall_native_messaging_host() -> Result<()> {
     if !cfg!(windows) {
         bail!("automatic native messaging host removal currently supports Windows only");
     }
-    let status = std::process::Command::new("reg.exe")
-        .args(["delete", native_messaging_registry_key(), "/f"])
-        .status()
-        .context("cannot remove native messaging host registry entry")?;
-    if !status.success() {
-        bail!("Windows registry could not remove native messaging host registration");
+    for key in [
+        native_messaging_registry_key(),
+        legacy_chrome_native_messaging_registry_key(),
+    ] {
+        let status = std::process::Command::new("reg.exe")
+            .args(["delete", key, "/f"])
+            .output()
+            .context("cannot remove native messaging host registry entry")?;
+        if key == native_messaging_registry_key() && !status.status.success() {
+            bail!("Windows registry could not remove native messaging host registration");
+        }
     }
     for path in [native_host_manifest_path()?, native_host_executable_path()?] {
         if path.exists() {
@@ -1329,6 +1347,18 @@ async fn main() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn native_host_registration_targets_brave_windows_registry() {
+        assert_eq!(
+            super::native_messaging_registry_key(),
+            r"HKCU\Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.famel.brave_cli"
+        );
+        assert_eq!(
+            super::legacy_chrome_native_messaging_registry_key(),
+            r"HKCU\Software\Google\Chrome\NativeMessagingHosts\com.famel.brave_cli"
+        );
+    }
+
     #[test]
     fn bridge_hello_reports_safe_auth_failure_categories() {
         let token = "a".repeat(32);
