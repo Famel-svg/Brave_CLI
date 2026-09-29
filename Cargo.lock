@@ -135,6 +135,7 @@ dependencies = [
  "toml",
  "url",
  "uuid",
+ "windows-registry",
 ]
 
 [[package]]

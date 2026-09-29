@@ -11,7 +11,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::{
     io::{Read, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
     time::Duration,
 };
 use tokio::{
@@ -598,6 +598,116 @@ fn native_messaging_registry_keys() -> [&'static str; 3] {
     ]
 }
 
+#[cfg(windows)]
+fn read_native_messaging_registration(key: &str) -> Result<Option<String>> {
+    const FILE_NOT_FOUND: u32 = 0x8007_0002;
+    let subkey = key
+        .strip_prefix("HKCU\\")
+        .context("native messaging registry key must be under HKCU")?;
+    let registry_key = match windows_registry::CURRENT_USER.open(subkey) {
+        Ok(key) => key,
+        Err(error) if error.code().0 as u32 == FILE_NOT_FOUND => return Ok(None),
+        Err(error) => {
+            return Err(anyhow::anyhow!(
+                "cannot inspect native messaging registration: {error}"
+            ));
+        }
+    };
+    match registry_key.get_string("") {
+        Ok(value) => Ok(Some(value)),
+        Err(error) if error.code().0 as u32 == FILE_NOT_FOUND => Ok(None),
+        Err(error) => Err(anyhow::anyhow!(
+            "cannot read native messaging registration: {error}"
+        )),
+    }
+}
+
+#[cfg(not(windows))]
+fn read_native_messaging_registration(_key: &str) -> Result<Option<String>> {
+    bail!("native messaging registry access supports Windows only")
+}
+
+#[cfg(windows)]
+fn write_native_messaging_registration(key: &str, manifest: &str) -> Result<()> {
+    let subkey = key
+        .strip_prefix("HKCU\\")
+        .context("native messaging registry key must be under HKCU")?;
+    let (parent, name) = subkey
+        .rsplit_once('\\')
+        .context("native messaging registry key has no host name")?;
+    windows_registry::CURRENT_USER
+        .create(parent)?
+        .create(name)?
+        .set_string("", manifest)?;
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn write_native_messaging_registration(_key: &str, _manifest: &str) -> Result<()> {
+    bail!("native messaging registry access supports Windows only")
+}
+
+#[cfg(windows)]
+fn remove_native_messaging_registration(key: &str) -> Result<()> {
+    const FILE_NOT_FOUND: u32 = 0x8007_0002;
+    let subkey = key
+        .strip_prefix("HKCU\\")
+        .context("native messaging registry key must be under HKCU")?;
+    let (parent, name) = subkey
+        .rsplit_once('\\')
+        .context("native messaging registry key has no host name")?;
+    let parent_key = match windows_registry::CURRENT_USER.open(parent) {
+        Ok(key) => key,
+        Err(error) if error.code().0 as u32 == FILE_NOT_FOUND => return Ok(()),
+        Err(error) => {
+            return Err(anyhow::anyhow!(
+                "cannot inspect native messaging registration: {error}"
+            ));
+        }
+    };
+    let host_key = match parent_key.options().write().open(name) {
+        Ok(key) => key,
+        Err(error) if error.code().0 as u32 == FILE_NOT_FOUND => return Ok(()),
+        Err(error) => {
+            return Err(anyhow::anyhow!(
+                "cannot open native messaging registration: {error}"
+            ));
+        }
+    };
+    match host_key.remove_value("") {
+        Ok(()) => Ok(()),
+        Err(error) if error.code().0 as u32 == FILE_NOT_FOUND => Ok(()),
+        Err(error) => Err(anyhow::anyhow!(
+            "cannot remove native messaging registration: {error}"
+        )),
+    }
+}
+
+#[cfg(not(windows))]
+fn remove_native_messaging_registration(_key: &str) -> Result<()> {
+    bail!("native messaging registry access supports Windows only")
+}
+
+fn registry_path_matches(left: &str, right: &str) -> bool {
+    left.trim()
+        .trim_matches('"')
+        .eq_ignore_ascii_case(right.trim().trim_matches('"'))
+}
+
+fn native_messaging_registration_is_owned(registration: Option<&str>, manifest: &str) -> bool {
+    registration.is_some_and(|value| registry_path_matches(value, manifest))
+}
+
+fn restore_installed_file(path: &Path, previous: Option<&[u8]>) -> Result<()> {
+    match previous {
+        Some(contents) => std::fs::write(path, contents)
+            .with_context(|| format!("cannot restore {}", path.display())),
+        None if path.exists() => std::fs::remove_file(path)
+            .with_context(|| format!("cannot remove partial file {}", path.display())),
+        None => Ok(()),
+    }
+}
+
 fn install_native_messaging_host(extension_id: &str) -> Result<()> {
     if !cfg!(windows) {
         bail!("automatic native messaging host installation currently supports Windows only");
@@ -611,12 +721,32 @@ fn install_native_messaging_host(extension_id: &str) -> Result<()> {
     }
     let executable = native_host_executable_path()?;
     let manifest = native_host_manifest_path()?;
+    let manifest_value = manifest.to_string_lossy().into_owned();
+    let registry_keys = native_messaging_registry_keys();
+    let mut registrations = Vec::with_capacity(registry_keys.len());
+    for key in registry_keys {
+        let current = read_native_messaging_registration(key)?;
+        if current.as_deref().is_some_and(|value| {
+            !native_messaging_registration_is_owned(Some(value), &manifest_value)
+        }) {
+            bail!("native messaging host name already points to a different manifest: {key}");
+        }
+        registrations.push((key, current.is_some()));
+    }
     let parent = executable
         .parent()
         .context("native host directory is unavailable")?;
     std::fs::create_dir_all(parent)?;
-    std::fs::copy(std::env::current_exe()?, &executable)
-        .context("cannot install native messaging executable")?;
+    let previous_executable = executable
+        .exists()
+        .then(|| std::fs::read(&executable))
+        .transpose()
+        .context("cannot back up existing native messaging executable")?;
+    let previous_manifest = manifest
+        .exists()
+        .then(|| std::fs::read(&manifest))
+        .transpose()
+        .context("cannot back up existing native messaging manifest")?;
     let contents = serde_json::json!({
         "name": "com.famel.brave_cli",
         "description": "Local token provider for Brave CLI browser bridge",
@@ -624,18 +754,41 @@ fn install_native_messaging_host(extension_id: &str) -> Result<()> {
         "type": "stdio",
         "allowed_origins": [format!("chrome-extension://{extension_id}/")]
     });
-    std::fs::write(&manifest, serde_json::to_vec_pretty(&contents)?)
-        .context("cannot write native messaging manifest")?;
-    for key in native_messaging_registry_keys() {
-        let status = std::process::Command::new("reg.exe")
-            .args(["add", key, "/ve", "/t", "REG_SZ", "/d"])
-            .arg(&manifest)
-            .args(["/f"])
-            .status()
-            .context("cannot register native messaging host in current-user registry")?;
-        if !status.success() {
-            bail!("Windows registry rejected native messaging host registration");
+    let mut added_registrations = Vec::new();
+    let install_result = (|| -> Result<()> {
+        std::fs::copy(std::env::current_exe()?, &executable)
+            .context("cannot install native messaging executable")?;
+        std::fs::write(&manifest, serde_json::to_vec_pretty(&contents)?)
+            .context("cannot write native messaging manifest")?;
+        for (key, already_registered) in &registrations {
+            if *already_registered {
+                continue;
+            }
+            added_registrations.push(*key);
+            write_native_messaging_registration(key, &manifest_value)?;
         }
+        Ok(())
+    })();
+    if let Err(error) = install_result {
+        let mut rollback_errors = Vec::new();
+        for key in added_registrations.into_iter().rev() {
+            if let Err(rollback_error) = remove_native_messaging_registration(key) {
+                rollback_errors.push(rollback_error.to_string());
+            }
+        }
+        if let Err(rollback_error) = restore_installed_file(&manifest, previous_manifest.as_deref())
+        {
+            rollback_errors.push(rollback_error.to_string());
+        }
+        if let Err(rollback_error) =
+            restore_installed_file(&executable, previous_executable.as_deref())
+        {
+            rollback_errors.push(rollback_error.to_string());
+        }
+        if rollback_errors.is_empty() {
+            return Err(error);
+        }
+        bail!("{error:#}; rollback errors: {}", rollback_errors.join("; "));
     }
     println!(
         "Native messaging host installed for extension {extension_id}; manifest {}",
@@ -648,16 +801,17 @@ fn uninstall_native_messaging_host() -> Result<()> {
     if !cfg!(windows) {
         bail!("automatic native messaging host removal currently supports Windows only");
     }
+    let manifest = native_host_manifest_path()?;
+    let manifest_value = manifest.to_string_lossy();
     for key in native_messaging_registry_keys() {
-        let status = std::process::Command::new("reg.exe")
-            .args(["delete", key, "/f"])
-            .output()
-            .context("cannot remove native messaging host registry entry")?;
-        if key == native_messaging_registry_keys()[0] && !status.status.success() {
-            bail!("Windows registry could not remove native messaging host registration");
+        if native_messaging_registration_is_owned(
+            read_native_messaging_registration(key)?.as_deref(),
+            &manifest_value,
+        ) {
+            remove_native_messaging_registration(key)?;
         }
     }
-    for path in [native_host_manifest_path()?, native_host_executable_path()?] {
+    for path in [manifest, native_host_executable_path()?] {
         if path.exists() {
             std::fs::remove_file(path)?;
         }
@@ -1352,6 +1506,22 @@ mod tests {
                 r"HKCU\Software\Google\Chrome\NativeMessagingHosts\com.famel.brave_cli",
             ]
         );
+    }
+
+    #[test]
+    fn native_host_uninstall_ownership_uses_exact_manifest_path_case_insensitively() {
+        let manifest = r"C:\Users\Rafael\AppData\Local\brave-cli-control\native-host.json";
+        assert!(super::native_messaging_registration_is_owned(
+            Some(r"c:\users\rafael\appdata\local\brave-cli-control\native-host.json"),
+            manifest
+        ));
+        assert!(!super::native_messaging_registration_is_owned(
+            Some(r"C:\OtherApp\native-host.json"),
+            manifest
+        ));
+        assert!(!super::native_messaging_registration_is_owned(
+            None, manifest
+        ));
     }
 
     #[test]
