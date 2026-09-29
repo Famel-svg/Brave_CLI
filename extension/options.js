@@ -1,12 +1,49 @@
 import { normalizeBridgeToken, tokensMatchByFingerprint } from './token.mjs';
 
 const input = document.querySelector('#token');
+const tokenVisibilityButton = document.querySelector('#toggle-token-visibility');
 const status = document.querySelector('#status');
 const tokenFile = document.querySelector('#token-file');
 const diagnosticSummary = document.querySelector('#diagnostic-summary');
 const diagnosticsOutput = document.querySelector('#diagnostics');
 const saved = await chrome.storage.local.get('bridgeToken');
 input.value = saved.bridgeToken || '';
+tokenVisibilityButton.disabled = !input.value;
+
+let tokenVisibilityTimer = null;
+function hideToken() {
+  input.type = 'password';
+  tokenVisibilityButton.textContent = 'Show token';
+  tokenVisibilityButton.setAttribute('aria-pressed', 'false');
+  if (tokenVisibilityTimer !== null) clearTimeout(tokenVisibilityTimer);
+  tokenVisibilityTimer = null;
+}
+
+tokenVisibilityButton.addEventListener('click', () => {
+  if (input.type === 'text') {
+    hideToken();
+    return;
+  }
+  if (!input.value) return;
+  input.type = 'text';
+  tokenVisibilityButton.textContent = 'Hide token';
+  tokenVisibilityButton.setAttribute('aria-pressed', 'true');
+  tokenVisibilityTimer = setTimeout(hideToken, 10_000);
+});
+
+input.addEventListener('input', () => {
+  tokenVisibilityButton.disabled = !input.value;
+  if (!input.value) hideToken();
+});
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') hideToken();
+});
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape') hideToken();
+});
+document.addEventListener('pagehide', hideToken);
+window.addEventListener('blur', hideToken);
 
 async function nativeTokenIsAuthoritative() {
   const state = await chrome.runtime.sendMessage({ type: 'ui.status' }).catch(() => null);
@@ -93,6 +130,9 @@ async function saveToken(value) {
     const saved = await chrome.storage.local.get('bridgeToken');
     tokenUnchanged = saved.bridgeToken === token;
     await chrome.storage.local.set({ bridgeToken: token });
+    input.value = token;
+    tokenVisibilityButton.disabled = false;
+    hideToken();
   } catch {
     status.textContent = 'Could not save token in extension storage.';
     return;

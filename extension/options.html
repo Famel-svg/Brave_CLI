@@ -12,6 +12,8 @@
     <p>Bridge endpoint fixed to <code>ws://127.0.0.1:9229</code>.</p>
     <label for="token">Bridge token</label>
     <input id="token" type="password" autocomplete="off" spellcheck="false">
+    <button id="toggle-token-visibility" type="button" aria-controls="token" aria-pressed="false">Show token</button>
+    <p>The token is hidden again after 10 seconds, when this page loses focus, or when it becomes hidden.</p>
     <button id="save" type="button">Save token</button>
     <p>The native host reads the bridge token directly for this extension. Manual import remains as a fallback.</p>
     <input id="token-file" type="file" accept=".token,.txt,text/plain">
