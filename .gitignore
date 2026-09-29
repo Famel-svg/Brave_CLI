@@ -15,3 +15,7 @@ target/
 build/
 *.egg-info/
 smoke.png
+
+# Local extension signing artifacts
+/extension.pem
+/extension.crx

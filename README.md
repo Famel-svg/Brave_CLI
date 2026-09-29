@@ -1,22 +1,32 @@
 # brave-cli-control
 
-Rust CLI for safe local Brave automation over Chrome DevTools Protocol (CDP). Version 0.2 adds page inspection in terminal or JSON; no screenshot required.
+CLI Rust para inspecionar e controlar páginas do Brave local por Chrome DevTools Protocol (CDP) ou extensão Manifest V3. Inspeção sem screenshots: texto, controles visíveis e árvore de acessibilidade.
 
-## Project objective
+## Objetivo do projeto
 
-Give an AI agent a way to browse **with you in your existing Brave session**: inspect the page already open, follow links or navigate when asked, and help research topics such as current news. The project is not meant to create a new user or silently copy a browser profile. The extension route can share a tab from your signed-in profile after you explicitly attach it. The direct-CDP route can use only a Brave process that already exposes a local debugging endpoint.
+Permitir que um agente de IA navegue **junto com você na sua sessão existente do Brave**: entender a página atual, seguir links ou navegar quando solicitado e ajudar em pesquisas como notícias recentes. O projeto não cria um usuário novo nem copia silenciosamente seu perfil.
 
-Page understanding uses visible DOM text, controls, geometry, and the accessibility tree, so ordinary page inspection does not need screenshots. It is not a pixel-perfect view: browser chrome, canvas pixels, video frames, hidden/offscreen content, and other desktop windows are outside scope. News discovery, source verification, and citations are agent workflows; the bridge itself exposes browser status, inspection, navigation, and opening tabs.
+A extensão pode compartilhar uma aba da sessão autenticada depois que você a conecta explicitamente. O modo CDP direto funciona somente com uma instância do Brave iniciada com depuração remota habilitada. Se usar diretório de dados separado, essa instância não herda os logins do seu perfil habitual.
 
-## Use the Brave session you already have open
+A inspeção usa DOM visível, controles, geometria e árvore de acessibilidade. Não representa pixels de canvas, quadros de vídeo, conteúdo oculto ou fora da tela, interface do navegador nem outras janelas. Pesquisa de notícias, verificação de fontes e citações pertencem ao fluxo do agente; o bridge oferece estado do navegador, inspeção, navegação e abertura de abas.
 
-The recommended AI connection is the Manifest V3 extension in `extension/`. It reuses your existing Brave profile and login state; it does not copy the profile, restart Brave, or open a second browser. The extension attaches only after you click **Attach to current tab**. MCP tools then expose that tab's semantic inspection, navigation, and open-in-new-tab actions.
+## Usar a sessão Brave já aberta: extensão
+
+A extensão Manifest V3 é o caminho para compartilhar uma aba do perfil Brave já autenticado. Ela só conecta depois do clique em **Attach to current tab**. A permissão `debugger` é ampla; conecte apenas a aba que quer compartilhar e desconecte ao terminar.
+
+Compile a CLI:
 
 ```powershell
 cargo install --path .
 ```
 
-Load `extension/` unpacked from `brave://extensions`, copy its displayed ID, install the host with `brave-cli native-host-install --extension-id <id>`, then add this MCP server to Codex configuration and restart Codex:
+Carregue `extension/` sem compactação em `brave://extensions`, copie o ID mostrado e instale o Native Messaging host:
+
+```powershell
+brave-cli native-host-install --extension-id <id>
+```
+
+Configure o servidor MCP no Codex e reinicie o cliente:
 
 ```json
 {
@@ -29,29 +39,21 @@ Load `extension/` unpacked from `brave://extensions`, copy its displayed ID, ins
 }
 ```
 
-Native Messaging supplies the bridge's current local token to the exact allowed extension ID, eliminating manual token copying and stale-token mismatches. The extension's `debugger` permission is powerful and applies to attached tabs. The WebSocket bridge binds only to loopback, pins the extension ID, requires the token, and rejects local/private IP URLs. It cannot inspect browser chrome or all rendered pixels. Remove the per-user host registration with `brave-cli native-host-uninstall`.
+O host local fornece à extensão o token atual, evitando cópia manual. A ponte WebSocket fica vinculada a `127.0.0.1`, valida o ID da extensão e rejeita destinos IP locais/privados. Remova o registro Native Messaging com `brave-cli native-host-uninstall`.
 
-### Direct CDP MCP (no extension)
+## MCP direto via CDP: sem extensão
 
-If Brave was already started with remote debugging enabled on loopback, connect MCP directly without the extension, Native Messaging, or bridge token:
+Use se o Brave **já** estiver expondo um endpoint CDP local:
 
 ```powershell
 brave-cli mcp --cdp-url http://127.0.0.1:9222
 ```
 
-The direct MCP tools list page targets; select one explicitly with `browser_select_tab` before inspection or navigation. It exposes semantic DOM/accessibility inspection, navigation to public HTTP(S) URLs, and opening a new tab. It does not expose arbitrary JavaScript, cookies, browser storage, credential values, clicks, form submission, or downloads. CDP itself grants broad control to any local process able to reach its endpoint, so the client accepts loopback endpoints only and does not start or restart Brave.
+O MCP lista as abas HTTP(S) públicas; selecione explicitamente uma com `browser_select_tab` antes de inspecionar ou navegar. O modo direto não expõe ferramentas MCP para JavaScript arbitrário, cookies, storage, credenciais, cliques ou envio de formulários. CDP continua sendo uma interface de alto privilégio para processos locais que alcançam sua porta. A CLI aceita somente endpoints loopback e não inicia nem reinicia o Brave.
 
-Direct CDP cannot attach after the fact to a browser process that did not start with remote debugging. Enabling it may require restarting Brave. Chromium-based browser behavior around remote debugging and the default profile varies by version; Chrome 136+ requires a non-standard user-data directory for these flags, which creates a separate browser data directory and does not reuse the signed-in profile. This project never copies or changes your profile to enable CDP. If no CDP endpoint is already active, use the extension mode above to control a selected tab in the current session.
+CDP não consegue anexar depois a um processo que iniciou sem depuração remota. O comando com `--user-data-dir` abre um perfil separado e persistente; ele não usa sua sessão autenticada habitual. O Chrome 136+ exige diretório de dados não padrão para essas flags; o comportamento exato depende da versão Chromium incluída no Brave. [Referência oficial do Chrome](https://developer.chrome.com/blog/remote-debugging-port).
 
-## Problems encountered and current status
-
-During setup on Windows, the extension repeatedly reported `ERR_CONNECTION_REFUSED` when nothing was listening on its WebSocket port (`127.0.0.1:9229`). After the Rust bridge started, connections reached it but authentication failed with `token mismatch`: diagnostics showed the extension's saved token did not match the token expected by the bridge. The recovery path then reported `Specified native messaging host not found.`
-
-The native-host executable and protocol worked in a direct local test, and the manifest/registry entries were present and pointed to that manifest. Those checks did not prove Brave itself could resolve and launch the host; the extension-context end-to-end recovery remained unsuccessful. Never put token values in logs, README, commits, or support messages.
-
-Direct CDP was added as another transport. It avoids extension token and Native Messaging setup, but does **not** fix access to a Brave process without CDP enabled. On this machine, the running Brave did not expose a CDP endpoint; port `9229` belonged to the old extension relay, not CDP. Therefore direct mode built and passed local tests, but connection to the personal Brave session remains unverified until that session exposes a loopback CDP endpoint. Enabling CDP may require restarting Brave and may require a separate user-data directory on Chromium versions with the default-profile restriction; a separate directory will not inherit the signed-in session. The project does not restart Brave or copy/modify your profile automatically.
-
-Configure direct MCP in Codex with:
+Configuração MCP:
 
 ```json
 {
@@ -64,22 +66,29 @@ Configure direct MCP in Codex with:
 }
 ```
 
-See [extension setup and protocol](extension/README.md) and [browser connection research](docs/browser-connection-research.md).
+## Problemas encontrados e estado atual
 
-## Inspect without screenshots
+Durante a configuração no Windows, a extensão apresentou `ERR_CONNECTION_REFUSED` quando não havia processo escutando em `127.0.0.1:9229`. Depois que a ponte Rust iniciou, ela recebeu conexões, mas recusou a autenticação com `token mismatch`: o token salvo na extensão não correspondia ao token esperado pela ponte. O mecanismo de recuperação então falhou com `Specified native messaging host not found.`
+
+O executável Native Messaging respondeu ao teste local do protocolo, e o manifesto e os registros do Windows apontavam para o manifesto esperado. Isso não provou que o Brave conseguia localizar e iniciar o host; a recuperação dentro do contexto da extensão permaneceu sem validação ponta a ponta. Nunca coloque valores de token em logs, README, commits ou mensagens de suporte.
+
+Foi adicionado MCP direto por CDP para eliminar extensão, Native Messaging e token compartilhado desse caminho. No teste feito, o Brave abriu um perfil separado, o endpoint `127.0.0.1:9222` respondeu e o MCP completou inicialização e listagem de ferramentas. A lista de abas veio vazia porque a página inicial era `about:blank`, que o modo direto exclui. Isso valida o transporte e o handshake MCP no perfil de teste, mas não a conexão à sessão autenticada habitual.
+
+A porta `9229` era da ponte WebSocket antiga, não do CDP. Sem endpoint CDP já ativo, o modo direto não conecta. Ativar CDP na sessão habitual pode exigir reiniciar o navegador e não é garantido pelas regras de segurança do Chromium; usar diretório separado cria outra sessão. O projeto não copia nem altera seu perfil automaticamente.
+
+## Inspecionar sem screenshots
 
 ```powershell
-cargo install --path .
 brave-cli inspect
 brave-cli inspect --format json --max-nodes 800
 brave-cli inspect --format dom
 ```
 
-`inspect` reports title, URL, viewport, scroll position/document size, focused element, visible page text, visible interactive/media elements with viewport rectangles, and Chrome accessibility tree (role/name/description). Output is bounded and redacts common credential fields. `--format dom` returns readable page text. Browser chrome, other desktop windows, canvas pixels, video frames, and offscreen page content are not represented; this tool inspects browser page state, not whole-desktop pixels.
+A inspeção retorna título, URL, viewport, rolagem, elemento focado, texto visível, controles/mídia visíveis com retângulos e árvore de acessibilidade. A saída tem limites e redige campos sensíveis comuns. Não mostra pixels do canvas, quadros de vídeo, interface do navegador, outras janelas ou conteúdo fora da tela.
 
-## Connect and control
+## Conectar e controlar uma instância de teste
 
-Optional isolated-profile fallback for testing (does not reuse your normal Brave session):
+Perfil isolado opcional para teste; não reutiliza a sessão habitual:
 
 ```powershell
 brave.exe --remote-debugging-port=9222 --user-data-dir="$env:LOCALAPPDATA\brave-cli-control\profile" about:blank
@@ -92,9 +101,9 @@ brave-cli click 'button#submit' --confirm
 brave-cli fill '#name' 'Rafael' --confirm
 ```
 
-Config file (`--config config.toml`), environment (`BRAVE_CLI_CDP_URL`, `BRAVE_CLI_ALLOWED_DOMAINS`), then CLI allowlist apply. Navigation and new tabs require an exact or subdomain allowlist match. Risky click/fill require `--confirm`; all page-context JavaScript requires `--confirm` because it can act with page permissions. A basic denylist catches common direct cookie/storage/credential access patterns; it is not a JavaScript sandbox. Do not run untrusted scripts. `--dry-run` never connects or changes browser state; for YAML workflows it applies to every step. Per-step `dry_run` is rejected.
+A configuração vem de `--config config.toml`, depois da variável `BRAVE_CLI_CDP_URL`, e recebe as allowlists passadas na CLI e em `BRAVE_CLI_ALLOWED_DOMAINS`. Navegação e abertura de abas exigem domínio exato ou subdomínio permitido. `click` e `fill` exigem `--confirm` para operações arriscadas. Todo JavaScript executado no contexto da página exige confirmação e não é uma sandbox; não execute scripts não confiáveis. `--dry-run` não conecta nem altera estado.
 
-Config example:
+Exemplo `config.toml`:
 
 ```toml
 [brave_cli]
@@ -102,11 +111,11 @@ cdp_url = "http://127.0.0.1:9222"
 allowed_domains = ["example.com"]
 ```
 
-## Why CDP snapshots
+## Por que snapshots CDP
 
-Chrome DevTools Protocol `DOMSnapshot.captureSnapshot` exposes flattened DOM (including iframes and shadow DOM), layout, and selected computed styles; `Accessibility.getFullAXTree` exposes semantic roles and names. This implementation uses CDP accessibility data plus visible DOM metrics/text, avoiding image capture and OCR. DOM visibility can differ from what pixels communicate; canvas/video/native browser UI remain outside scope.
+`DOMSnapshot.captureSnapshot` expõe DOM achatado, layout e estilos selecionados; `Accessibility.getFullAXTree` fornece papéis e nomes semânticos. Esta implementação combina árvore de acessibilidade, texto e métricas visíveis, sem OCR ou captura de tela. Visibilidade calculada pelo DOM pode diferir dos pixels renderizados; canvas, vídeo e interface nativa ficam fora do escopo.
 
-## Build and test
+## Build e testes
 
 ```powershell
 cargo fmt --check
@@ -114,11 +123,11 @@ cargo test
 cargo build --release
 ```
 
-Live CDP tests use a disposable Brave profile. The extension is the path for the existing personal session; verify it manually on the target Brave build before relying on it.
+Testes CDP ao vivo devem usar perfil Brave descartável. A conexão com a sessão pessoal depende da extensão ou de um endpoint CDP que já esteja ativo e precisa ser verificada no Brave-alvo.
 
-## Existing CLI features
+## Funcionalidades da CLI
 
-Rust CLI also supports `start`, `tabs`, `navigate`, `tab open`, `click`, `fill`, `evaluate`, and YAML `run` with optional screenshot steps for an explicitly debug-enabled browser. `start` is isolated-profile fallback. `inspect` supplies text/tree output without images.
+A CLI Rust também inclui `start`, `tabs`, `navigate`, `tab open`, `click`, `fill`, `evaluate` e workflows YAML com etapas opcionais de screenshot para um navegador explicitamente habilitado para CDP. `start` usa perfil isolado. `inspect` retorna texto e árvore sem screenshots.
 
 ```powershell
 brave-cli evaluate 'document.title'
@@ -126,6 +135,6 @@ brave-cli page screenshot page.png
 brave-cli --allow-domain example.com run workflows/example.yaml --dry-run
 ```
 
-## Migration
+## Migração
 
-Rust CLI lives in `Cargo.toml` and `src-rust/`. Python implementation remains in `src/brave_cli/` for comparison during transition; Rust is documented as the primary CLI.
+A CLI Rust está em `Cargo.toml` e `src-rust/`. A implementação Python em `src/brave_cli/` permanece para comparação até a paridade e a cobertura de testes justificarem sua remoção.
