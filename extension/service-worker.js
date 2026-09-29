@@ -13,8 +13,9 @@ let tokenLoaded = false;
 let activeBridgeToken = '';
 let activeTokenSource = 'none';
 let nativeHostState = 'starting';
+let nativeRecoveryInProgress = false;
 let storageRevision = 0;
-const WORKER_BUILD = '0.1.7';
+const WORKER_BUILD = '0.1.8';
 const NATIVE_HOST = 'com.famel.brave_cli';
 const DIAGNOSTIC_KEY = 'bridgeDiagnostics';
 const DIAGNOSTIC_LIMIT = 200;
@@ -54,6 +55,57 @@ function send(payload) {
   const frame = JSON.stringify(payload);
   if (frame.length > MAX_MESSAGE_CHARS) throw new Error('Bridge message exceeds size limit');
   socket.send(frame);
+}
+
+async function recoverNativeTokenAfterMismatch() {
+  if (nativeRecoveryInProgress) return;
+  nativeRecoveryInProgress = true;
+  const requestRevision = storageRevision;
+  recordDiagnostic('native_token_recovery_started', {
+    trigger: 'token_mismatch',
+    previousTokenSource: activeTokenSource,
+    storageRevision: requestRevision
+  });
+  try {
+    const response = await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'get_bridge_token' });
+    if (!response?.ok || typeof response.token !== 'string' || !/^[0-9a-f]{32,4096}$/i.test(response.token)) {
+      throw new Error(response?.error || 'Native host returned invalid token metadata');
+    }
+    if (requestRevision !== storageRevision) {
+      recordDiagnostic('native_token_recovery_superseded', { reason: 'storage_changed_during_request', storageRevision });
+      if (!tokenMismatch && !authRejected) connectBridge();
+      return;
+    }
+    nativeHostState = 'connected';
+    if (response.token === activeBridgeToken) {
+      bridgeError = 'token mismatch; Native Messaging returned the same token';
+      recordDiagnostic('native_token_recovery_no_change', {
+        tokenSource: activeTokenSource,
+        token: tokenMetadata(activeBridgeToken)
+      });
+      notifyPopup();
+      return;
+    }
+    activeBridgeToken = response.token;
+    activeTokenSource = 'native_messaging';
+    tokenLoaded = true;
+    tokenMismatch = false;
+    authRejected = false;
+    bridgeError = '';
+    recordDiagnostic('native_token_recovery_succeeded', {
+      tokenSource: activeTokenSource,
+      token: tokenMetadata(activeBridgeToken)
+    });
+    notifyPopup();
+    reconnectBridge();
+  } catch (error) {
+    nativeHostState = 'unavailable';
+    bridgeError = `token mismatch; Native Messaging recovery failed: ${redactText(safeError(error))}`;
+    recordDiagnostic('native_token_recovery_failed', { error: redactText(safeError(error)) });
+    notifyPopup();
+  } finally {
+    nativeRecoveryInProgress = false;
+  }
 }
 
 async function connectBridge() {
@@ -103,10 +155,12 @@ async function connectBridge() {
     if (message?.type === 'hello' && message.ok !== true) {
       authenticated = false;
       bridgeError = String(message.error || 'Authentication rejected').slice(0, 300);
-      tokenMismatch = bridgeError === 'token mismatch';
+      tokenMismatch = message.code === 'TOKEN_MISMATCH'
+        || bridgeError.trim().toLowerCase() === 'token mismatch';
       authRejected = !tokenMismatch;
       recordDiagnostic('authentication_rejected', { reason: bridgeError, retryBlocked: authRejected || tokenMismatch });
       notifyPopup();
+      if (tokenMismatch) void recoverNativeTokenAfterMismatch();
       // Browser WebSocket API reserves 1008; use an application-defined code.
       ws.close(4008, bridgeError);
       return;

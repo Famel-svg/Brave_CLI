@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
 
-async function loadOptionsPage(nativeMessagingResult, savedToken = 'a'.repeat(32)) {
+async function loadOptionsPage(nativeMessagingResult, savedToken = 'a'.repeat(32), stateOverrides = {}) {
   const elements = new Map();
   const timers = [];
   const documentListeners = new Map();
@@ -14,6 +14,8 @@ async function loadOptionsPage(nativeMessagingResult, savedToken = 'a'.repeat(32
     authenticated: false,
     bridgeConnected: false,
     workerBuild: '0.1.6',
+    tokenSource: 'extension_storage',
+    ...stateOverrides,
   };
   let reloadCount = 0;
   const chrome = {
@@ -87,6 +89,16 @@ test('settings page shows native host startup error without reloading', async ()
   assert.match(state.elements.get('#status').textContent, /host not found/);
   assert.equal(state.reloadCount, 0);
   assert.equal(state.timers.some(timer => timer.delay === 250), false);
+});
+
+test('settings page retries native host when connected state still uses stale storage token', async () => {
+  const state = await loadOptionsPage(
+    { ok: true, token: 'b'.repeat(32) },
+    'a'.repeat(32),
+    { nativeHostState: 'connected', tokenMismatch: true, tokenSource: 'extension_storage' },
+  );
+  assert.match(state.elements.get('#status').textContent, /Restarting extension worker/);
+  assert.ok(state.timers.some(timer => timer.delay === 250));
 });
 
 test('saved token reveal hides automatically after ten seconds', async () => {

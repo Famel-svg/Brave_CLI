@@ -88,7 +88,7 @@ async function recoverNativeMessaging() {
     await new Promise(resolve => setTimeout(resolve, 100));
     state = await chrome.runtime.sendMessage({ type: 'ui.status' }).catch(() => null);
   }
-  if (state?.authenticated || state?.nativeHostState === 'connected') return;
+  if (state?.authenticated || state?.tokenSource === 'native_messaging') return;
   if (state?.tokenMismatch !== true && state?.nativeHostState !== 'unavailable') return;
 
   status.textContent = 'Retrying the local Native Messaging host…';

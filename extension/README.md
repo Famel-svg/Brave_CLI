@@ -53,8 +53,10 @@ Bridge authentication reply:
 or rejection:
 
 ```json
-{"type":"hello","ok":false,"error":"authentication failed"}
+{"type":"hello","ok":false,"error":"token mismatch","code":"TOKEN_MISMATCH"}
 ```
+
+Token mismatch replies also include stable code `TOKEN_MISMATCH`; clients should use that code rather than matching display text.
 
 After authentication, bridge may send request frames:
 

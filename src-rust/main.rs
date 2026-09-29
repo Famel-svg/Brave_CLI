@@ -826,6 +826,14 @@ fn validate_bridge_hello(
     Ok(())
 }
 
+fn bridge_error_code(reason: &str) -> &'static str {
+    if reason == "token mismatch" {
+        "TOKEN_MISMATCH"
+    } else {
+        "AUTHENTICATION_FAILED"
+    }
+}
+
 async fn serve_extension_bridge(
     listener: TcpListener,
     token: String,
@@ -897,7 +905,7 @@ async fn serve_extension_bridge(
                 "authentication_rejected",
                 &format!("reason={reason} {received_metadata}"),
             );
-            let rejection = serde_json::json!({"type":"hello","ok":false,"error":reason});
+            let rejection = serde_json::json!({"type":"hello","ok":false,"error":reason,"code":bridge_error_code(reason)});
             let _ = socket
                 .send(Message::Text(rejection.to_string().into()))
                 .await;
@@ -1374,6 +1382,11 @@ mod tests {
             validate_bridge_hello(&mismatch.to_string(), &"a".repeat(32)),
             Err("token mismatch")
         );
+        assert_eq!(bridge_error_code("token mismatch"), "TOKEN_MISMATCH");
+        assert_eq!(
+            bridge_error_code("unsupported bridge protocol"),
+            "AUTHENTICATION_FAILED"
+        );
 
         let wrong_protocol =
             serde_json::json!({"type":"hello","protocol":2,"token":"a".repeat(32)});
@@ -1509,6 +1522,31 @@ mod tests {
                 .await
                 .is_err()
         );
+
+        let mut mismatch_request = format!("ws://{address}").into_client_request().unwrap();
+        mismatch_request.headers_mut().insert(
+            "Origin",
+            HeaderValue::from_str(&format!("chrome-extension://{extension_id}")).unwrap(),
+        );
+        let (mut mismatch_socket, _) = async_tungstenite::tokio::connect_async(mismatch_request)
+            .await
+            .unwrap();
+        mismatch_socket
+            .send(Message::Text(
+                serde_json::json!({"type":"hello","protocol":1,"token":"f".repeat(32)})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .unwrap();
+        let mismatch_reply = mismatch_socket.next().await.unwrap().unwrap();
+        let Message::Text(mismatch_reply) = mismatch_reply else {
+            panic!("expected token mismatch reply")
+        };
+        let mismatch_reply: serde_json::Value = serde_json::from_str(&mismatch_reply).unwrap();
+        assert_eq!(mismatch_reply["ok"], false);
+        assert_eq!(mismatch_reply["error"], "token mismatch");
+        assert_eq!(mismatch_reply["code"], "TOKEN_MISMATCH");
 
         let mut request = format!("ws://{address}").into_client_request().unwrap();
         request.headers_mut().insert(
